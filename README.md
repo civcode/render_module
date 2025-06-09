@@ -37,3 +37,26 @@ find_Package(RenderModule REQUIRED)
 add_executable(RenderModuleTest main.cpp)
 target_link_libraries(RenderModuleTest RenderModule::RenderModule)
 ```
+
+RenderModule can also be used as submodule.
+```
+$ git submodule add https://github.com/... submodule/RenderModule
+
+cmake_minimum_required(VERSION  3.14)
+project(RenderModuleTest)
+
+add_subdirectory(submodule/RenderModule)
+
+add_executable(RenderModuleTest main.cpp)
+target_link_libraries(RenderModuleTest RenderModule)
+```
+
+## Issues
+
+```
+CMake Error:
+CMake Error: install(EXPORT "RenderModuleTargets" ...) includes target "RenderModule" which requires target "glad" that is not in any export set.
+
+Solution:
+- Delete builddir and build again
+```
