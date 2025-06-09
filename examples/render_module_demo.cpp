@@ -69,7 +69,7 @@ int main() {
 
         // First window: Sine plot
         ImGui::Begin("Sine Plot");
-        if (ImPlot::BeginPlot("Sine Wave")) {
+        if (ImPlot::BeginPlot("Sine Wave", ImVec2(-1, -1))) {
             static float x[100], y[100];
             for (int i = 0; i < 100; ++i) {
                 x[i] = i * 0.1f;
