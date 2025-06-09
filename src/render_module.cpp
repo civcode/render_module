@@ -50,7 +50,6 @@ static void LoadFonts(NVGcontext* vg) {
     const char* home = std::getenv("HOME");
     if (!home) {
         std::fprintf(stderr, "Error: HOME environment variable is not set.\n");
-        // exit(EXIT_FAILURE); 
     }
 
     std::string base_path = std::string(home) + "/.local/share/render-module/";

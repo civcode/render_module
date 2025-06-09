@@ -232,17 +232,17 @@ void Draw(const std::string& label, NVGcontext* vg, std::function<void(NVGcontex
             state.offset.x = std::floor(mouseX - contentPosBefore.x * state.zoom);
             state.offset.y = std::floor(mouseY - contentPosBefore.y * state.zoom);
 
-            printf("CanvasPos: (%.1f, %.1f)\n", canvasPos.x, canvasPos.y);
-            printf("CanvasSize: (%.1f, %.1f)\n", canvasSize.x, canvasSize.y);
+            // printf("CanvasPos: (%.1f, %.1f)\n", canvasPos.x, canvasPos.y);
+            // printf("CanvasSize: (%.1f, %.1f)\n", canvasSize.x, canvasSize.y);
             // printf("CanvasTopLeft: (%.1f, %.1f)\n", canvasTopLeft.x, canvasTopLeft.y);
-            printf("Zoom: %.2f, Offset: (%.1f, %.1f)\n", state.zoom, state.offset.x, state.offset.y);
+            // printf("Zoom: %.2f, Offset: (%.1f, %.1f)\n", state.zoom, state.offset.x, state.offset.y);
         }
     }
 
     if (hovering && active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         state.offset.x += std::floor(delta.x);
         state.offset.y -= std::floor(delta.y); // Flip Y for NanoVG
-        printf("Dragging Offset: (%.1f, %.1f)\n", state.offset.x, state.offset.y);
+        // printf("Dragging Offset: (%.1f, %.1f)\n", state.offset.x, state.offset.y);
     }
 
     // Apply transforms and draw
