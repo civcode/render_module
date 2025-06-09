@@ -60,3 +60,17 @@ CMake Error: install(EXPORT "RenderModuleTargets" ...) includes target "RenderMo
 Solution:
 - Delete builddir and build again
 ```
+
+## Misc
+
+#### VS Code Config
+
+c_cpp_properites.json
+```
+...
+"includePath": [
+    "${workspaceFolder}/**",
+    "${userHome}/.local/include/**"
+],
+...
+```
