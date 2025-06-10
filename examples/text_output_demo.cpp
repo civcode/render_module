@@ -3,6 +3,7 @@
 #include <iostream>
 #include <vector>
 #include <string>
+#include <streambuf>
 
 class DebugConsole
 {
@@ -15,7 +16,8 @@ public:
         vsnprintf(buf, IM_ARRAYSIZE(buf), fmt, args);
         va_end(args);
         buf[IM_ARRAYSIZE(buf) - 1] = 0;
-        logs.emplace_back(buf);
+        std::string log_line = std::string("> ") + buf;
+        logs.emplace_back(log_line);
         scrollToBottom = true;
     }
 
@@ -63,6 +65,39 @@ private:
 
 
 
+class ImGuiStreamBuf : public std::streambuf {
+public:
+    ImGuiStreamBuf(DebugConsole& console) : console(console) {}
+
+protected:
+    int overflow(int c) override {
+        if (c != EOF) {
+            buffer += static_cast<char>(c);
+            if (c == '\n') {
+                flushBuffer();
+            }
+        }
+        return c;
+    }
+
+    int sync() override {
+        flushBuffer();
+        return 0;
+    }
+
+private:
+    void flushBuffer() {
+        if (!buffer.empty()) {
+            console.AddLog("%s", buffer.c_str());
+            buffer.clear();
+        }
+    }
+
+    std::string buffer;
+    DebugConsole& console;
+};
+
+
 
 int main() {
     RenderModule::Init(980, 720);
@@ -84,7 +119,7 @@ int main() {
     });
 
     RenderModule::RegisterImGuiCallback([]() {
-        ImGui::Begin("Main Window 2", nullptr, ImGuiWindowFlags_MenuBar);
+        ImGui::Begin("Main Window 2", nullptr);
         ImGui::TextWrapped(
             "This is a second window with some text. "
             "It will also display CJK characters if the font supports them.");
@@ -95,14 +130,21 @@ int main() {
 
     // static DebugConsole console;
     DebugConsole console;
+    ImGuiStreamBuf imguiBuf(console);
     console.AddLog("Application started...");
     console.AddLog("Debug Console initialized.");
 
-    // RenderModule::RegisterImGuiCallback([&console]() {
-    //     static int cnt;
-    //     console.AddLog("Debug Console entry %d.", cnt++);
-    //     console.Draw("Debug Console");
-    // });
+    std::streambuf* oldCoutBuf = std::cout.rdbuf(&imguiBuf); 
+    std::cout << "Redirecting std::cout to ImGui Debug Console..." << std::endl;
+    std::cout << "Hello, world!" << std::endl;
+    std::cout.rdbuf(oldCoutBuf);
+
+    RenderModule::RegisterImGuiCallback([&console]() {
+        static int cnt;
+        if (cnt < 10)
+            console.AddLog("Debug Console entry %d.", cnt++);
+        console.Draw("Debug Console");
+    });
 
 
 

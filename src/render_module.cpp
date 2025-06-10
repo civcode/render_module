@@ -22,7 +22,7 @@ struct PaintWindow {
 static struct {
     GLFWwindow* window;
     NVGcontext* vg;
-    std::function<void()> imguiCallback;
+    std::vector<std::function<void()>> imguiCallbacks;
     std::vector<PaintWindow> paintWindows;
 } ctx;
 
@@ -103,11 +103,15 @@ void RenderModule::Init(int width, int height, const char* title) {
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable; 
     // io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;       
     // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;         
+    // io.Fonts->AddFontFromFileTTF("/home/chris/.local/share/render-module/fonts/roboto/Roboto-Regulat.ttf", 18.0f);
 
     ImPlot::CreateContext();
     ImGui::StyleColorsLight();
     ImGui_ImplGlfw_InitForOpenGL(ctx.window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
+
+
+    
 
     ctx.vg = nvgCreateGL3(NVG_ANTIALIAS | NVG_STENCIL_STROKES);
     if (!ctx.vg) {
@@ -118,7 +122,8 @@ void RenderModule::Init(int width, int height, const char* title) {
 }
 
 void RenderModule::RegisterImGuiCallback(std::function<void()> callback) {
-    ctx.imguiCallback = callback;
+    // ctx.imguiCallback = callback;
+    ctx.imguiCallbacks.push_back(callback);
 }
 
 void RenderModule::RegisterNanoVGCallback(const std::string& name, std::function<void(NVGcontext*)> callback) {
@@ -139,28 +144,30 @@ void RenderModule::Run() {
         ImGui::NewFrame();
 
         /* Enable docking w.r.t. the parent GLFW window */
-        // ImGui::SetNextWindowPos(ImVec2(0, 0));
-        // // ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-        // ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x/2, ImGui::GetIO().DisplaySize.y), ImGuiCond_Always);
-        // ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        // ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        // ImGui::Begin("Main DockSpace Window", nullptr, 
-        //     // ImGuiWindowFlags_MenuBar | 
-        //     ImGuiWindowFlags_NoDocking |
-        //     ImGuiWindowFlags_NoTitleBar |
-        //     ImGuiWindowFlags_NoCollapse |
-        //     ImGuiWindowFlags_NoResize |
-        //     ImGuiWindowFlags_NoMove |
-        //     ImGuiWindowFlags_NoBringToFrontOnFocus |
-        //     ImGuiWindowFlags_NoNavFocus);
-        // ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
-        // ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
-        // ImGui::PopStyleVar(2);
-        // ImGui::End();
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        // ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+        ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x/3, ImGui::GetIO().DisplaySize.y), ImGuiCond_Always);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::Begin("Main DockSpace Window", nullptr, 
+            // ImGuiWindowFlags_MenuBar | 
+            ImGuiWindowFlags_NoDocking |
+            ImGuiWindowFlags_NoTitleBar |
+            ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoBringToFrontOnFocus |
+            ImGuiWindowFlags_NoNavFocus);
+        ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
+        ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
+        ImGui::PopStyleVar(2);
+        ImGui::End();
         /* === */
 
-        if (ctx.imguiCallback)
-            ctx.imguiCallback();
+        // if (ctx.imguiCallback)
+        //     ctx.imguiCallback();
+        for (auto& cb : ctx.imguiCallbacks)
+            cb();
 
         for (auto& win : ctx.paintWindows) {
             ImGui::Begin(win.name.c_str());
