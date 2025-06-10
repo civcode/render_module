@@ -58,6 +58,7 @@ CMake Error:
 CMake Error: install(EXPORT "RenderModuleTargets" ...) includes target "RenderModule" which requires target "glad" that is not in any export set.
 
 Solution:
+- Start the build again
 - Delete builddir and build again
 ```
 
