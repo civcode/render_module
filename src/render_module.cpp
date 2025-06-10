@@ -52,19 +52,20 @@ static void LoadFonts(NVGcontext* vg) {
         std::fprintf(stderr, "Error: HOME environment variable is not set.\n");
     }
 
-    std::string base_path = std::string(home) + "/.local/share/render-module/";
+    std::string base_path = std::string(home) + "/.local/share/render-module/fonts/roboto/";
 
     std::vector<std::pair<std::string, std::string>> fonts = {
-        {"sans", "fonts/roboto/Roboto-Regular.ttf"},
-        {"sans-bold", "fonts/roboto/Roboto-Bold.ttf"},
-        {"sans-italic", "fonts/roboto/Roboto-Italic.ttf"},
-        {"sans-bold-italic", "fonts/roboto/Roboto-BoldItalic.ttf"},
-        {"mono", "fonts/roboto/RobotoMono-Regular.ttf"},
-        {"mono-bold", "fonts/roboto/RobotoMono-Bold.ttf"},
-        {"mono-italic", "fonts/roboto/RobotoMono-Italic.ttf"},
-        {"mono-bold-italic", "fonts/roboto/RobotoMono-BoldItalic.ttf"}
+        {"sans", "Roboto-Regular.ttf"},
+        {"sans-bold", "Roboto-Bold.ttf"},
+        {"sans-italic", "Roboto-Italic.ttf"},
+        {"sans-bold-italic", "Roboto-BoldItalic.ttf"},
+        {"mono", "RobotoMono-Regular.ttf"},
+        {"mono-bold", "RobotoMono-Bold.ttf"},
+        {"mono-italic", "RobotoMono-Italic.ttf"},
+        {"mono-bold-italic", "RobotoMono-BoldItalic.ttf"}
     };
 
+    printf("Loading fonts from '%s'\n", base_path.c_str());
     for (const auto& font : fonts) {
         std::string alias = font.first;
         std::string full_path = base_path + font.second;
@@ -74,7 +75,8 @@ static void LoadFonts(NVGcontext* vg) {
             fprintf(stderr, "Could not load font '%s' from '%s'.\n", alias.c_str(), full_path.c_str());
             continue;
         } else {
-            printf("Loaded font '%s' from '%s'.\n", alias.c_str(), full_path.c_str());
+            // printf("Loaded font '%s' from '%s'.\n", alias.c_str(), full_path.c_str());
+            printf("Loaded font '%s' from '%s'.\n", alias.c_str(), font.second.c_str());
         }
     }
 }
@@ -99,6 +101,8 @@ void RenderModule::Init(int width, int height, const char* title) {
 
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable; 
+    // io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;       
+    // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;         
 
     ImPlot::CreateContext();
     ImGui::StyleColorsLight();
@@ -134,6 +138,27 @@ void RenderModule::Run() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
+        /* Enable docking w.r.t. the parent GLFW window */
+        // ImGui::SetNextWindowPos(ImVec2(0, 0));
+        // // ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+        // ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x/2, ImGui::GetIO().DisplaySize.y), ImGuiCond_Always);
+        // ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        // ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        // ImGui::Begin("Main DockSpace Window", nullptr, 
+        //     // ImGuiWindowFlags_MenuBar | 
+        //     ImGuiWindowFlags_NoDocking |
+        //     ImGuiWindowFlags_NoTitleBar |
+        //     ImGuiWindowFlags_NoCollapse |
+        //     ImGuiWindowFlags_NoResize |
+        //     ImGuiWindowFlags_NoMove |
+        //     ImGuiWindowFlags_NoBringToFrontOnFocus |
+        //     ImGuiWindowFlags_NoNavFocus);
+        // ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
+        // ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
+        // ImGui::PopStyleVar(2);
+        // ImGui::End();
+        /* === */
+
         if (ctx.imguiCallback)
             ctx.imguiCallback();
 
@@ -168,6 +193,14 @@ void RenderModule::Run() {
 
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        // if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+            // GLFWwindow* backup_current_context = glfwGetCurrentContext();
+            // ImGui::UpdatePlatformWindows();
+            // ImGui::RenderPlatformWindowsDefault();
+            // glfwMakeContextCurrent(backup_current_context);
+        // }
+
         glfwSwapBuffers(ctx.window);
     }
 }
