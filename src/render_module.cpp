@@ -26,6 +26,10 @@ static struct {
     std::vector<PaintWindow> paintWindows;
 } ctx;
 
+static struct {
+    bool parent_window_docking_enabled = false;
+} settings;
+
 static void CreateFBO(PaintWindow& win, int width, int height) {
     if (win.texture) {
         glDeleteTextures(1, &win.texture);
@@ -121,6 +125,10 @@ void RenderModule::Init(int width, int height, const char* title) {
     LoadFonts(ctx.vg);
 }
 
+void RenderModule::EnableParentWindowDocking() {
+    settings.parent_window_docking_enabled = true;
+}
+
 void RenderModule::RegisterImGuiCallback(std::function<void()> callback) {
     // ctx.imguiCallback = callback;
     ctx.imguiCallbacks.push_back(callback);
@@ -143,29 +151,29 @@ void RenderModule::Run() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        /* Enable docking w.r.t. the parent GLFW window */
-        ImGui::SetNextWindowPos(ImVec2(0, 0));
-        // ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-        ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x/3, ImGui::GetIO().DisplaySize.y), ImGuiCond_Always);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        ImGui::Begin("Main DockSpace Window", nullptr, 
-            // ImGuiWindowFlags_MenuBar | 
-            ImGuiWindowFlags_NoDocking |
-            ImGuiWindowFlags_NoTitleBar |
-            ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoResize |
-            ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoBringToFrontOnFocus |
-            ImGuiWindowFlags_NoNavFocus);
-        ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
-        ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
-        ImGui::PopStyleVar(2);
-        ImGui::End();
-        /* === */
+        if (settings.parent_window_docking_enabled) {
+            /* Enable docking w.r.t. the parent GLFW window */
+            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            // ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+            ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x/3, ImGui::GetIO().DisplaySize.y), ImGuiCond_Always);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+            ImGui::Begin("Main DockSpace Window", nullptr, 
+                // ImGuiWindowFlags_MenuBar | 
+                ImGuiWindowFlags_NoDocking |
+                ImGuiWindowFlags_NoTitleBar |
+                ImGuiWindowFlags_NoCollapse |
+                ImGuiWindowFlags_NoResize |
+                ImGuiWindowFlags_NoMove |
+                ImGuiWindowFlags_NoBringToFrontOnFocus |
+                ImGuiWindowFlags_NoNavFocus);
+            ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
+            ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
+            ImGui::PopStyleVar(2);
+            ImGui::End();
+            /* === */
+        }
 
-        // if (ctx.imguiCallback)
-        //     ctx.imguiCallback();
         for (auto& cb : ctx.imguiCallbacks)
             cb();
 
