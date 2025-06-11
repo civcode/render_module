@@ -73,15 +73,6 @@ FetchContent_MakeAvailable(roboto_mono_font)
 
 
 
-
-# === Add dummy target to Generate glad sources ===
-add_custom_target(PrepareGlad ALL
-    DEPENDS glad
-)
-# === ===
-
-
-
 # === RenderModule libraruy ===
 file(GLOB SRC_FILES
     ${CMAKE_SOURCE_DIR}/src/render_module.cpp
@@ -95,11 +86,7 @@ file(GLOB SRC_FILES
 )
 
 # === Create the library ===
-option(BUILD_SHARED_LIBS "Build shared libraries" ON)
-
-add_library(RenderModule src/render_module.cpp)
-# Add dependency on glad to ensure it is built before RenderModule
-add_dependencies(RenderModule PrepareGlad)
+add_library(RenderModule SHARED src/render_module.cpp)
 
 target_include_directories(RenderModule 
     PUBLIC
@@ -118,7 +105,7 @@ target_link_libraries(RenderModule PRIVATE ${GLFW_LIBRARIES} glad)
 target_compile_definitions(RenderModule 
     PUBLIC 
         NANOVG_GL3_IMPLEMENTATION 
-        IMGUI_ENABLE_VIEWPORTS
+        # IMGUI_ENABLE_VIEWPORTS
         # IMGUI_HAS_DOCK
     # PRIVATE RENDERMODULE_INTERNAL_BUILD
 )
@@ -215,14 +202,6 @@ set(EXAMPLE_INLUDES
 )
 add_executable(RenderModuleDemo examples/render_module_demo.cpp)
 target_include_directories(RenderModuleDemo PRIVATE ${EXAMPLE_INLUDES})
-# target_include_directories(RenderModuleDemo PRIVATE
-#     ${CMAKE_SOURCE_DIR}/include
-#     ${GLFW_INCLUDE_DIRS}
-#     ${glad_SOURCE_DIR}/include
-#     ${imgui_SOURCE_DIR}
-#     ${implot_SOURCE_DIR}
-#     ${nanovg_SOURCE_DIR}/src
-# )
 target_link_libraries(RenderModuleDemo PRIVATE RenderModule)
 
 add_executable(TextOutputDemo examples/text_output_demo.cpp)
