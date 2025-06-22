@@ -1,5 +1,8 @@
 #include "render_module/render_module.hpp"
 
+#include <iostream>
+#include <thread>
+
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -24,6 +27,8 @@ static struct {
     NVGcontext* vg;
     std::vector<std::function<void()>> imguiCallbacks;
     std::vector<PaintWindow> paintWindows;
+    double fps;
+
 } ctx;
 
 static struct {
@@ -85,7 +90,9 @@ static void LoadFonts(NVGcontext* vg) {
     }
 }
 
-void RenderModule::Init(int width, int height, const char* title) {
+void RenderModule::Init(int width, int height, double fps, const char* title) {
+    ctx.fps = fps;
+
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -139,7 +146,9 @@ void RenderModule::RegisterNanoVGCallback(const std::string& name, std::function
 }
 
 void RenderModule::Run() {
+    double prev_frame_time = glfwGetTime();
     while (!glfwWindowShouldClose(ctx.window)) {
+
         glfwPollEvents();
         int display_w, display_h;
         glfwGetFramebufferSize(ctx.window, &display_w, &display_h);
@@ -153,9 +162,9 @@ void RenderModule::Run() {
 
         if (settings.parent_window_docking_enabled) {
             /* Enable docking w.r.t. the parent GLFW window */
-            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            // ImGui::SetNextWindowPos(ImVec2(0, 0));
             // ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-            ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x/3, ImGui::GetIO().DisplaySize.y), ImGuiCond_Always);
+            // ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x/3, ImGui::GetIO().DisplaySize.y), ImGuiCond_Always);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
             ImGui::Begin("Main DockSpace Window", nullptr, 
@@ -167,12 +176,56 @@ void RenderModule::Run() {
                 ImGuiWindowFlags_NoMove |
                 ImGuiWindowFlags_NoBringToFrontOnFocus |
                 ImGuiWindowFlags_NoNavFocus);
+            ImGui::SetWindowPos(ImVec2(0, 0));
+            ImGui::SetWindowSize(ImGui::GetIO().DisplaySize);
+            // ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x/3, ImGui::GetIO().DisplaySize.y), ImGuiCond_Always);
             ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
             ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
             ImGui::PopStyleVar(2);
             ImGui::End();
             /* === */
         }
+
+
+
+
+
+        ImGui::Begin("Dockable Window", nullptr, ImGuiWindowFlags_NoCollapse);
+        // Get GLFW window size
+        int winWidth, winHeight;
+        glfwGetWindowSize(ctx.window, &winWidth, &winHeight);
+
+        // Get ImGui window position and size
+        ImVec2 pos = ImGui::GetWindowPos();
+        ImVec2 size = ImGui::GetWindowSize();
+
+        // Threshold for edge snapping (in pixels)
+        float snapThreshold = 20.0f;
+
+        // Check if window is hovered and being released after drag
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && 
+            ImGui::IsMouseReleased(0)) {
+
+            bool snapLeft   = pos.x <= snapThreshold;
+            bool snapRight  = (pos.x + size.x) >= (winWidth - snapThreshold);
+            bool snapTop    = pos.y <= snapThreshold;
+            bool snapBottom = (pos.y + size.y) >= (winHeight - snapThreshold);
+
+            if ((snapLeft && snapRight) || (snapTop && snapBottom) || 
+                (snapLeft && snapTop) || (snapRight && snapTop)) {
+                // Snap to full screen or top-half, etc. Based on your logic
+                ImGui::SetWindowPos(ImVec2(0, 0));
+                ImGui::SetWindowSize(ImVec2((float)winWidth, (float)winHeight));
+            }
+        }
+        ImGui::Text("Drag this window near an edge to snap.");
+        ImGui::End();
+
+
+
+
+
+
 
         for (auto& cb : ctx.imguiCallbacks)
             cb();
@@ -217,6 +270,16 @@ void RenderModule::Run() {
         // }
 
         glfwSwapBuffers(ctx.window);
+
+        double delta_time = glfwGetTime() - prev_frame_time;
+        prev_frame_time += delta_time;
+        if (ctx.fps != 0 && delta_time < 1.0 / ctx.fps) {
+            double sleep_time = 1.0 / ctx.fps - delta_time;
+            /* glfwWaitEventsTimeout makes the app more respoinsive */
+            /* the render loop only sleeps if there are no events, e.g. mouse movement */
+            glfwWaitEventsTimeout(sleep_time);
+            // std::this_thread::sleep_for(std::chrono::duration<double>(sleep_time));
+        }
     }
 }
 
@@ -232,4 +295,10 @@ void RenderModule::Shutdown() {
     ImGui::DestroyContext();
     glfwDestroyWindow(ctx.window);
     glfwTerminate();
+}
+
+ImVec2ih RenderModule::GetGLFWWindowSize() {
+    int width, height;
+    glfwGetWindowSize(ctx.window, &width, &height);
+    return ImVec2ih(width, height);
 }
