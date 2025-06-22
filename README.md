@@ -39,9 +39,9 @@ target_link_libraries(RenderModuleTest RenderModule::RenderModule)
 ```
 
 ~~RenderModule can also be used as submodule.~~
-Adding as submodule is currently not working.
+Adding as submodule is currently **not** working.
 ```
-#$ git submodule add https://github.com/... submodule/RenderModule
+$ git submodule add https://github.com/... submodule/RenderModule
 
 cmake_minimum_required(VERSION  3.14)
 project(RenderModuleTest)
