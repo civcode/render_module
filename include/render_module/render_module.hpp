@@ -25,6 +25,7 @@ public:
     static void Run();
     static void Shutdown();
     static ImVec2ih GetGLFWWindowSize();
+    static NVGcontext* GetNanoVGContext();
 };
 
 #endif // PLOTAPP_HPP_

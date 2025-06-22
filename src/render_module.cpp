@@ -84,8 +84,7 @@ static void LoadFonts(NVGcontext* vg) {
             fprintf(stderr, "Could not load font '%s' from '%s'.\n", alias.c_str(), full_path.c_str());
             continue;
         } else {
-            // printf("Loaded font '%s' from '%s'.\n", alias.c_str(), full_path.c_str());
-            printf("Loaded font '%s' from '%s'.\n", alias.c_str(), font.second.c_str());
+            // printf("Loaded font '%s' from '%s'.\n", alias.c_str(), font.second.c_str());
         }
     }
 }
@@ -190,36 +189,38 @@ void RenderModule::Run() {
 
 
 
-        ImGui::Begin("Dockable Window", nullptr, ImGuiWindowFlags_NoCollapse);
-        // Get GLFW window size
-        int winWidth, winHeight;
-        glfwGetWindowSize(ctx.window, &winWidth, &winHeight);
+        if (0) {
+            ImGui::Begin("Dockable Window", nullptr, ImGuiWindowFlags_NoCollapse);
+            // Get GLFW window size
+            int winWidth, winHeight;
+            glfwGetWindowSize(ctx.window, &winWidth, &winHeight);
 
-        // Get ImGui window position and size
-        ImVec2 pos = ImGui::GetWindowPos();
-        ImVec2 size = ImGui::GetWindowSize();
+            // Get ImGui window position and size
+            ImVec2 pos = ImGui::GetWindowPos();
+            ImVec2 size = ImGui::GetWindowSize();
 
-        // Threshold for edge snapping (in pixels)
-        float snapThreshold = 20.0f;
+            // Threshold for edge snapping (in pixels)
+            float snapThreshold = 20.0f;
 
-        // Check if window is hovered and being released after drag
-        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && 
-            ImGui::IsMouseReleased(0)) {
+            // Check if window is hovered and being released after drag
+            if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) && 
+                ImGui::IsMouseReleased(0)) {
 
-            bool snapLeft   = pos.x <= snapThreshold;
-            bool snapRight  = (pos.x + size.x) >= (winWidth - snapThreshold);
-            bool snapTop    = pos.y <= snapThreshold;
-            bool snapBottom = (pos.y + size.y) >= (winHeight - snapThreshold);
+                bool snapLeft   = pos.x <= snapThreshold;
+                bool snapRight  = (pos.x + size.x) >= (winWidth - snapThreshold);
+                bool snapTop    = pos.y <= snapThreshold;
+                bool snapBottom = (pos.y + size.y) >= (winHeight - snapThreshold);
 
-            if ((snapLeft && snapRight) || (snapTop && snapBottom) || 
-                (snapLeft && snapTop) || (snapRight && snapTop)) {
-                // Snap to full screen or top-half, etc. Based on your logic
-                ImGui::SetWindowPos(ImVec2(0, 0));
-                ImGui::SetWindowSize(ImVec2((float)winWidth, (float)winHeight));
+                if ((snapLeft && snapRight) || (snapTop && snapBottom) || 
+                    (snapLeft && snapTop) || (snapRight && snapTop)) {
+                    // Snap to full screen or top-half, etc. Based on your logic
+                    ImGui::SetWindowPos(ImVec2(0, 0));
+                    ImGui::SetWindowSize(ImVec2((float)winWidth, (float)winHeight));
+                }
             }
+            ImGui::Text("Drag this window near an edge to snap.");
+            ImGui::End();
         }
-        ImGui::Text("Drag this window near an edge to snap.");
-        ImGui::End();
 
 
 
@@ -301,4 +302,9 @@ ImVec2ih RenderModule::GetGLFWWindowSize() {
     int width, height;
     glfwGetWindowSize(ctx.window, &width, &height);
     return ImVec2ih(width, height);
+}
+
+NVGcontext *RenderModule::GetNanoVGContext()
+{
+    return ctx.vg;
 }
