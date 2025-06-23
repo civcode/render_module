@@ -12,7 +12,6 @@
 #include "nanovg.h"
 
 #include "render_module/nvg_wrapper.hpp"
-#include "render_module/zoom_view.hpp"
 
 struct NVGcontext;
 
@@ -22,6 +21,7 @@ public:
     static void EnableParentWindowDocking();
     static void RegisterImGuiCallback(std::function<void()> callback);
     static void RegisterNanoVGCallback(const std::string& name, std::function<void(NVGcontext*)> callback);
+    static void ZoomView(std::function<void(NVGcontext*)> callback);
     static void Run();
     static void Shutdown();
     static ImVec2ih GetGLFWWindowSize();

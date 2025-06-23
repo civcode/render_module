@@ -250,6 +250,7 @@ void Draw(const std::string& label, NVGcontext* vg, std::function<void(NVGcontex
     nvgSave(vg);
     nvgTranslate(vg, std::floor(state.offset.x), std::floor(state.offset.y));
     nvgScale(vg, state.zoom, state.zoom);
+
     drawCallback(vg);
 
     // Write zoom and offset info to the canvas with ImGui
@@ -267,7 +268,6 @@ void Draw(const std::string& label, NVGcontext* vg, std::function<void(NVGcontex
     nvgText(vg, x0+3, y0+30, oss.str().c_str(), nullptr);
 
     nvgRestore(vg);
-
     // ImGui::EndChild(); // End canvas child
 }
 } // namespace ZoomView

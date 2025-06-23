@@ -141,6 +141,8 @@ set(IMPLOT_HEADERS
 )
 set(NANOVG_HEADERS
     ${nanovg_SOURCE_DIR}/src/nanovg.h
+    ${nanovg_SOURCE_DIR}/src/nanovg_gl.h
+    ${nanovg_SOURCE_DIR}/src/nanovg_gl_utils.h
 )
 install(
     FILES 

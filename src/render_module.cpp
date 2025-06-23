@@ -1,6 +1,7 @@
 #include "render_module/render_module.hpp"
 
 #include <iostream>
+#include <stack>
 #include <thread>
 
 #include <glad/glad.h>
@@ -10,8 +11,16 @@
 #include <backends/imgui_impl_opengl3.h>
 #include <implot.h>
 // #define NANOVG_GL3_IMPLEMENTATION
-#include "nanovg.h"
+// #include "nanovg.h"
+// #include "nanovg_gl.h"
 #include "nanovg_gl.h"
+#include "nanovg_gl_utils.h"
+
+#include "render_module/zoom_view.hpp"
+
+namespace {
+    thread_local std::stack<std::string> label_stack;
+}
 
 struct PaintWindow {
     std::string name;
@@ -141,7 +150,25 @@ void RenderModule::RegisterImGuiCallback(std::function<void()> callback) {
 }
 
 void RenderModule::RegisterNanoVGCallback(const std::string& name, std::function<void(NVGcontext*)> callback) {
-    ctx.paintWindows.push_back(PaintWindow{name, callback});
+    ctx.paintWindows.push_back(PaintWindow{
+        name, 
+        [name, callback](NVGcontext* vg) {
+            label_stack.push(name);
+            callback(vg);
+            label_stack.pop();
+        }
+    });
+}
+
+void RenderModule::ZoomView(std::function<void(NVGcontext *)> callback)
+{
+    if (label_stack.empty()) {
+        std::cerr << "Error: ZoomView called without an active label." << std::endl;
+        return;
+    }
+
+    const std::string& label = label_stack.top() + "_zoom_view";
+    ZoomView::Draw(label, ctx.vg, callback);
 }
 
 void RenderModule::Run() {
@@ -161,9 +188,6 @@ void RenderModule::Run() {
 
         if (settings.parent_window_docking_enabled) {
             /* Enable docking w.r.t. the parent GLFW window */
-            // ImGui::SetNextWindowPos(ImVec2(0, 0));
-            // ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-            // ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x/3, ImGui::GetIO().DisplaySize.y), ImGuiCond_Always);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
             ImGui::Begin("Main DockSpace Window", nullptr, 
@@ -184,9 +208,6 @@ void RenderModule::Run() {
             ImGui::End();
             /* === */
         }
-
-
-
 
 
         if (0) {
@@ -221,9 +242,6 @@ void RenderModule::Run() {
             ImGui::Text("Drag this window near an edge to snap.");
             ImGui::End();
         }
-
-
-
 
 
 

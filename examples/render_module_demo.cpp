@@ -126,7 +126,7 @@ int main() {
     });
     
     RenderModule::RegisterNanoVGCallback("NanoVG Canvas 3", [](NVGcontext* vg) {
-        ZoomView::Draw("Zoomable NanoVG Canvas", vg, [](NVGcontext* vg) {
+        RenderModule::ZoomView([](NVGcontext* vg) {
 
             nvg::SetContext(vg);
             static int cnt;
@@ -156,7 +156,7 @@ int main() {
     });
         
     RenderModule::RegisterNanoVGCallback("Zoomable NanoVG", [](NVGcontext* vg) {
-        ZoomView::Draw("Zoomable View", vg, [](NVGcontext* vg) {
+        RenderModule::ZoomView([](NVGcontext* vg) {
             nvg::SetContext(vg);
             nvg::BeginPath();
             nvg::Rect(0, 0, 200, 200);
@@ -189,7 +189,7 @@ int main() {
     });
 
     RenderModule::RegisterNanoVGCallback("Struct NanoVG", [](NVGcontext* vg) {
-        ZoomView::Draw("Struct View", vg, [](NVGcontext* vg) {
+        RenderModule::ZoomView([](NVGcontext* vg) {
             nvg::SetContext(vg);
             nvg::BeginPath();
             nvg::MoveTo(0, 0);

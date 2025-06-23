@@ -72,8 +72,20 @@ void ResetScissor() { nvgResetScissor(g_ctx); }
 NVGcolor RGB(unsigned char r, unsigned char g, unsigned char b) {
     return nvgRGB(r, g, b);
 }
+NVGcolor RGB(int r, int g, int b) {
+    return nvgRGB(static_cast<unsigned char>(r), static_cast<unsigned char>(g), static_cast<unsigned char>(b));
+}
+NVGcolor RGBf(float r, float g, float b) {
+    return nvgRGBf(r, g, b);
+}
 NVGcolor RGBA(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
     return nvgRGBA(r, g, b, a);
+}
+NVGcolor RGBA(int r, int g, int b, int a) {
+    return nvgRGBA(static_cast<unsigned char>(r), static_cast<unsigned char>(g), static_cast<unsigned char>(b), static_cast<unsigned char>(a));
+}
+NVGcolor RGBAf(float r, float g, float b, float a) {
+    return nvgRGBAf(r, g, b, a);
 }
 
 } // namespace nvg

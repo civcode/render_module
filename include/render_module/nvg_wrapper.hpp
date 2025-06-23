@@ -60,7 +60,19 @@ void ResetScissor();
 
 // Utilities
 NVGcolor RGB(unsigned char r, unsigned char g, unsigned char b);
+NVGcolor RGB(int r, int g, int b); 
+NVGcolor RGBf(float r, float g, float b);
 NVGcolor RGBA(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+NVGcolor RGBA(int r, int g, int b, int a); 
+NVGcolor RGBAf(float r, float g, float b, float a);
+
+template<typename T>
+NVGcolor RGBA(T, T, T, T) {
+    static_assert(sizeof(T) == 0, "Use RGBAf() for float or RGBA() for uchar");
+    return NVGcolor(); 
+}
+
+
 
 } // namespace nvg
 
