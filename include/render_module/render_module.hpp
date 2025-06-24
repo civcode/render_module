@@ -12,6 +12,7 @@
 #include "nanovg.h"
 
 #include "render_module/nvg_wrapper.hpp"
+#include "render_module/glad_wrapper.hpp"
 
 struct NVGcontext;
 

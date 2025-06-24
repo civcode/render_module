@@ -37,6 +37,10 @@ void Restore() { nvgRestore(g_ctx); }
 void Reset() { nvgReset(g_ctx); }
 
 // Paints
+NVGpaint ImagePattern(float cx, float cy, float w, float h, float angle, int image, float alpha) {
+    return nvgImagePattern(g_ctx, cx, cy, w, h, angle, image, alpha);
+}
+
 NVGpaint LinearGradient(float sx, float sy, float ex, float ey, NVGcolor icol, NVGcolor ocol) {
     return nvgLinearGradient(g_ctx, sx, sy, ex, ey, icol, ocol);
 }
@@ -88,4 +92,12 @@ NVGcolor RGBAf(float r, float g, float b, float a) {
     return nvgRGBAf(r, g, b, a);
 }
 
+NVGLUframebuffer *GLUtilsCreateFramebuffer(int width, int height, int image_flags)
+{
+    return nvgluCreateFramebuffer(g_ctx, width, height, image_flags);
+}
+void GLUtilsBindFramebuffer(NVGLUframebuffer *fb)
+{
+    nvgluBindFramebuffer(fb);
+}
 } // namespace nvg

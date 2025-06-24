@@ -1,7 +1,10 @@
 #ifndef NVG_WRAPPER_HPP_
 #define NVG_WRAPPER_HPP_
 
+#include <glad/glad.h>
 #include "nanovg.h"
+// #include "nanovg_gl.h"
+#include "nanovg_gl_utils.h"
 
 namespace nvg {
 
@@ -40,6 +43,7 @@ void Restore();
 void Reset();
 
 // Paints
+NVGpaint ImagePattern(float cx, float cy, float w, float h, float angle, int image, float alpha);
 NVGpaint LinearGradient(float sx, float sy, float ex, float ey, NVGcolor icol, NVGcolor ocol);
 NVGpaint RadialGradient(float cx, float cy, float inr, float outr, NVGcolor icol, NVGcolor ocol);
 NVGpaint BoxGradient(float x, float y, float w, float h, float r, float f, NVGcolor icol, NVGcolor ocol);
@@ -73,6 +77,9 @@ NVGcolor RGBA(T, T, T, T) {
 }
 
 
+/* OpenGL utilities */
+NVGLUframebuffer*  GLUtilsCreateFramebuffer(int width, int height, int image_flags);
+void GLUtilsBindFramebuffer(NVGLUframebuffer* fb);
 
 } // namespace nvg
 

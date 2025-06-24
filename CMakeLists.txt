@@ -91,11 +91,11 @@ add_library(RenderModule SHARED src/render_module.cpp)
 target_include_directories(RenderModule 
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
-        # $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${glad_BINARY_DIR}/include>
         $<INSTALL_INTERFACE:include>
     PRIVATE 
         ${GLFW_INCLUDE_DIRS} 
-        ${glad_BINARY_DIR}/include
+        # ${glad_BINARY_DIR}/include
         ${imgui_SOURCE_DIR}
         ${implot_SOURCE_DIR}
         ${nanovg_SOURCE_DIR}/src
@@ -130,6 +130,10 @@ install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 
 # === Install public Library Headers ===
+set(GLAD_HEADERS
+    ${glad_BINARY_DIR}/include/glad/glad.h
+    ${glad_BINARY_DIR}/include/KHR/khrplatform.h
+)
 set(IMGUI_HEADERS
     ${imgui_SOURCE_DIR}/imgui.h
     ${imgui_SOURCE_DIR}/imconfig.h
@@ -143,6 +147,12 @@ set(NANOVG_HEADERS
     ${nanovg_SOURCE_DIR}/src/nanovg.h
     ${nanovg_SOURCE_DIR}/src/nanovg_gl.h
     ${nanovg_SOURCE_DIR}/src/nanovg_gl_utils.h
+)
+install(
+    FILES 
+        ${GLAD_HEADERS}
+    DESTINATION 
+        ${CMAKE_INSTALL_INCLUDEDIR}/glad
 )
 install(
     FILES 
@@ -209,4 +219,8 @@ target_link_libraries(RenderModuleDemo PRIVATE RenderModule)
 add_executable(TextOutputDemo examples/text_output_demo.cpp)
 target_include_directories(TextOutputDemo PRIVATE ${EXAMPLE_INLUDES})
 target_link_libraries(TextOutputDemo PRIVATE RenderModule)
+
+add_executable(FrameBufferDemo examples/frame_buffer_demo.cpp)
+target_include_directories(FrameBufferDemo PRIVATE ${EXAMPLE_INLUDES})
+target_link_libraries(FrameBufferDemo PRIVATE RenderModule)
 # === ===
