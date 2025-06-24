@@ -22,8 +22,7 @@ public:
     static void EnableParentWindowDocking();
     static void RegisterImGuiCallback(std::function<void()> callback);
     static void RegisterNanoVGCallback(const std::string& name, std::function<void(NVGcontext*)> callback,
-                                        // std::function<void()> offscreenCallback = nullptr);
-                                        std::function<RenderModule::IsolatedFrameBuffer*> offscreenCallback = nullptr);
+                                        std::function<void(NVGcontext*)> offscreenCallback = nullptr);
     static void ZoomView(std::function<void(NVGcontext*)> callback);
     static void IsolatedFrameBuffer(std::function<void()> userFramebufferRender); 
     static void Run();

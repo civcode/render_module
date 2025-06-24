@@ -25,7 +25,7 @@ namespace {
 struct PaintWindow {
     std::string name;
     std::function<void(NVGcontext*)> callback;
-    std::function<void()> offscreenCallback;
+    std::function<void(NVGcontext*)> offscreenCallback;
     GLuint fbo = 0;
     GLuint texture = 0;
     GLuint rbo = 0;
@@ -151,7 +151,7 @@ void RenderModule::RegisterImGuiCallback(std::function<void()> callback) {
 }
 
 void RenderModule::RegisterNanoVGCallback(const std::string& name, std::function<void(NVGcontext*)> callback,
-                                          std::function<void()> offscreenCallback) {
+                                          std::function<void(NVGcontext*)> offscreenCallback) {
     ctx.paintWindows.push_back(PaintWindow{
         name, 
         [name, callback](NVGcontext* vg) {
@@ -256,7 +256,7 @@ void RenderModule::Run() {
         for (auto& win : ctx.paintWindows) {
             if (win.offscreenCallback) {
                 // RenderModule::IsolatedFrameBuffer(win.offscreenCallback());
-                win.offscreenCallback();
+                win.offscreenCallback(ctx.vg);
             }
 
             ImGui::Begin(win.name.c_str());

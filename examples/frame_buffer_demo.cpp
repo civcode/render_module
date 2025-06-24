@@ -77,25 +77,25 @@ int main() {
         // nvgEndFrame(vg);
         // nvgluBindFramebuffer(NULL);
     },
-        [&]() {
+        [&](NVGcontext* vg) {
             RenderModule::IsolatedFrameBuffer([&]() {
-            nvg::GLUtilsBindFramebuffer(fb);
-            glad::glViewport(0, 0, width, height);
-            // glad::glClearColor(0, 0, 0, 0);
-            // glad::glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-            nvgBeginFrame(vg, width, height, 1.0f);
-            nvgBeginPath(vg);
-            static float cx = 10;
-            static float cy = 10;
-            static float dx = 0.5f;
-            nvgCircle(vg, cx, cy, 5);
-            cx += dx;
-            cy += dx;
-            nvgFillColor(vg, nvgRGBA(255, 150, 0, 155));
-            nvgFill(vg);
-            nvgClosePath(vg);
-            nvgEndFrame(vg);
-            nvgluBindFramebuffer(NULL);
+                nvg::GLUtilsBindFramebuffer(fb);
+                glad::glViewport(0, 0, width, height);
+                // glad::glClearColor(0, 0, 0, 0);
+                // glad::glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+                nvgBeginFrame(vg, width, height, 1.0f);
+                nvgBeginPath(vg);
+                static float cx = 10;
+                static float cy = 10;
+                static float dx = 0.5f;
+                nvgCircle(vg, cx, cy, 5);
+                cx += dx;
+                cy += dx;
+                nvgFillColor(vg, nvgRGBA(255, 150, 0, 155));
+                nvgFill(vg);
+                nvgClosePath(vg);
+                nvgEndFrame(vg);
+                nvgluBindFramebuffer(NULL);
             });
         });
         
