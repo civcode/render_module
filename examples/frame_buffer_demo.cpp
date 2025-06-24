@@ -47,7 +47,7 @@ int main() {
     nvgBeginFrame(vg, width, height, 1.0f);
     nvgBeginPath(vg);
     nvgCircle(vg, width/2+50, height/2+50, 50);
-    nvgFillColor(vg, nvgRGBA(255, 0, 125, 255));
+    nvgFillColor(vg, nvgRGBA(0, 0, 255, 255));
     nvgFill(vg);
     nvgEndFrame(vg);
     
@@ -67,18 +67,41 @@ int main() {
         nvgFill(vg);
         nvgClosePath(vg);
 
+
         // nvgluBindFramebuffer(fb);
         // nvgBeginFrame(vg, fb->image, 200, 200, 1.0f);
         nvgBeginPath(vg);
-        nvgCircle(vg, 100, 100, 50);
-        nvgFillColor(vg, nvgRGBA(255, 0, 0, 155));
+        nvgCircle(vg, 10, 10, 5);
+        nvgFillColor(vg, nvgRGBA(255, 0, 150, 155));
         nvgFill(vg);
         // nvgEndFrame(vg);
         // nvgluBindFramebuffer(NULL);
-    });
+    },
+        [&]() {
+            RenderModule::IsolatedFrameBuffer([&]() {
+            nvg::GLUtilsBindFramebuffer(fb);
+            glad::glViewport(0, 0, width, height);
+            // glad::glClearColor(0, 0, 0, 0);
+            // glad::glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+            nvgBeginFrame(vg, width, height, 1.0f);
+            nvgBeginPath(vg);
+            static float cx = 10;
+            static float cy = 10;
+            static float dx = 0.5f;
+            nvgCircle(vg, cx, cy, 5);
+            cx += dx;
+            cy += dx;
+            nvgFillColor(vg, nvgRGBA(255, 150, 0, 155));
+            nvgFill(vg);
+            nvgClosePath(vg);
+            nvgEndFrame(vg);
+            nvgluBindFramebuffer(NULL);
+            });
+        });
+        
 
 
-    RenderModule::RegisterImGuiCallback([]() {
+    RenderModule::RegisterImGuiCallback([&]() {
 
         // ImGui::Begin("Main Window", nullptr, ImGuiWindowFlags_MenuBar);
         ImGui::Begin("Main Text Window", nullptr);
@@ -91,6 +114,28 @@ int main() {
         static char buf[32] = "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e";
         ImGui::InputText("UTF-8 input", buf, IM_ARRAYSIZE(buf));
         ImGui::End();
+
+
+        // RenderModule::IsolatedFrameBuffer([&]() {
+        //     nvg::GLUtilsBindFramebuffer(fb);
+        //     glad::glViewport(0, 0, width, height);
+        //     // glad::glClearColor(0, 0, 0, 0);
+        //     // glad::glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        //     nvgBeginFrame(vg, width, height, 1.0f);
+        //     nvgBeginPath(vg);
+        //     static float cx = 10;
+        //     static float cy = 10;
+        //     static float dx = 0.5f;
+        //     nvgCircle(vg, cx, cy, 5);
+        //     cx += dx;
+        //     cy += dx;
+        //     nvgFillColor(vg, nvgRGBA(255, 150, 0, 155));
+        //     nvgFill(vg);
+        //     nvgClosePath(vg);
+        //     nvgEndFrame(vg);
+        //     nvgluBindFramebuffer(NULL);
+        
+        // });
 
     });
 

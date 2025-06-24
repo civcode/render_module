@@ -21,8 +21,10 @@ public:
     static void Init(int width, int height, double fps = 30.0, const char* title = "RenderModule");
     static void EnableParentWindowDocking();
     static void RegisterImGuiCallback(std::function<void()> callback);
-    static void RegisterNanoVGCallback(const std::string& name, std::function<void(NVGcontext*)> callback);
+    static void RegisterNanoVGCallback(const std::string& name, std::function<void(NVGcontext*)> callback,
+                                        std::function<void()> offscreenCallback = nullptr);
     static void ZoomView(std::function<void(NVGcontext*)> callback);
+    static void IsolatedFrameBuffer(std::function<void()> userFramebufferRender); 
     static void Run();
     static void Shutdown();
     static ImVec2ih GetGLFWWindowSize();

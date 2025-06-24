@@ -25,6 +25,7 @@ namespace {
 struct PaintWindow {
     std::string name;
     std::function<void(NVGcontext*)> callback;
+    std::function<void()> offscreenCallback;
     GLuint fbo = 0;
     GLuint texture = 0;
     GLuint rbo = 0;
@@ -149,15 +150,18 @@ void RenderModule::RegisterImGuiCallback(std::function<void()> callback) {
     ctx.imguiCallbacks.push_back(callback);
 }
 
-void RenderModule::RegisterNanoVGCallback(const std::string& name, std::function<void(NVGcontext*)> callback) {
+void RenderModule::RegisterNanoVGCallback(const std::string& name, std::function<void(NVGcontext*)> callback,
+                                          std::function<void()> offscreenCallback) {
     ctx.paintWindows.push_back(PaintWindow{
         name, 
         [name, callback](NVGcontext* vg) {
             label_stack.push(name);
             callback(vg);
             label_stack.pop();
-        }
+        },
+        offscreenCallback
     });
+
 }
 
 void RenderModule::ZoomView(std::function<void(NVGcontext *)> callback)
@@ -250,6 +254,11 @@ void RenderModule::Run() {
             cb();
 
         for (auto& win : ctx.paintWindows) {
+            if (win.offscreenCallback) {
+                // RenderModule::IsolatedFrameBuffer(win.offscreenCallback());
+                win.offscreenCallback();
+            }
+
             ImGui::Begin(win.name.c_str());
             ImVec2 size = ImGui::GetContentRegionAvail();
             // int w = static_cast<int>(size.x);
@@ -302,7 +311,25 @@ void RenderModule::Run() {
     }
 }
 
-void RenderModule::Shutdown() {
+void RenderModule::IsolatedFrameBuffer(std::function<void()> userFramebufferRender)
+{
+    GLint prevFBO;
+    GLint viewport[4];
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+    glGetIntegerv(GL_VIEWPORT, viewport);
+
+    // Execute user's framebuffer binding + NanoVG draw
+    userFramebufferRender();
+
+    // Unbind framebuffer
+    nvgluBindFramebuffer(nullptr);
+
+    // Restore previous state
+    glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
+    glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+}
+void RenderModule::Shutdown()
+{
     for (auto& win : ctx.paintWindows) {
         if (win.texture) glDeleteTextures(1, &win.texture);
         if (win.fbo) glDeleteFramebuffers(1, &win.fbo);
