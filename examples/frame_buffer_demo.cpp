@@ -77,7 +77,8 @@ int main() {
         },
         /* Offscreen callback */
         [&](NVGcontext* vg) {
-            RenderModule::IsolatedFrameBuffer([&](NVGcontext* vg) {
+            // RenderModule::IsolatedFrameBuffer([&](NVGcontext* vg) {
+            [&](NVGcontext* vg) {
                 nvg::GLUtilsBindFramebuffer(fb);
                 glad::glViewport(0, 0, width, height);
                 // glad::glClearColor(0, 0, 0, 0);
@@ -95,7 +96,7 @@ int main() {
                 nvgClosePath(vg);
                 nvgEndFrame(vg);
                 nvgluBindFramebuffer(NULL);
-            });
+            };
         });
         
 
