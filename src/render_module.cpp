@@ -263,8 +263,8 @@ void RenderModule::Run() {
             ImVec2 size = ImGui::GetContentRegionAvail();
             // int w = static_cast<int>(size.x);
             // int h = static_cast<int>(size.y);
-            int w = std::max(16, static_cast<int>(size.x));
-            int h = std::max(16, static_cast<int>(size.y));
+            int w = std::max(64, static_cast<int>(size.x));
+            int h = std::max(64, static_cast<int>(size.y));
 
             if (w != win.width || h != win.height) {
                 CreateFBO(win, w, h);
@@ -311,7 +311,7 @@ void RenderModule::Run() {
     }
 }
 
-void RenderModule::IsolatedFrameBuffer(std::function<void()> userFramebufferRender)
+void RenderModule::IsolatedFrameBuffer(std::function<void(NVGcontext*)> userFramebufferRender)
 {
     GLint prevFBO;
     GLint viewport[4];
@@ -319,7 +319,7 @@ void RenderModule::IsolatedFrameBuffer(std::function<void()> userFramebufferRend
     glGetIntegerv(GL_VIEWPORT, viewport);
 
     // Execute user's framebuffer binding + NanoVG draw
-    userFramebufferRender();
+    userFramebufferRender(ctx.vg);
 
     // Unbind framebuffer
     nvgluBindFramebuffer(nullptr);

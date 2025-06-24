@@ -35,14 +35,10 @@ int main() {
         return -1;
     }
     // nvgImageSize(vg, fb->image, &width, &height);
-    // nvgluBindFramebuffer(fb);
     nvg::GLUtilsBindFramebuffer(fb);
     glad::glViewport(0, 0, width, height);
-    glad::glClearColor(0, 0, 0, 0);
-    glad::glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-    // glViewport(0, 0, width, height);
-    // glClearColor(0, 0, 0, 0);
-    // glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    // glad::glClearColor(0, 0, 0, 0);
+    // glad::glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
     nvgBeginFrame(vg, width, height, 1.0f);
     nvgBeginPath(vg);
@@ -52,7 +48,7 @@ int main() {
     nvgEndFrame(vg);
     
     nvgluBindFramebuffer(NULL);
-        
+       
     // NVGpaint img_paint = nvgImagePattern(vg, 0, 0, 200, 200, 0, fb->image, 1.0f);
     NVGpaint img_paint = nvg::ImagePattern(0, 0, 200, 200, 0, fb->image, 1.0f);
     if (img_paint.image == 0) {
@@ -60,25 +56,28 @@ int main() {
         return -1;
     }
 
-    RenderModule::RegisterNanoVGCallback("Red Circle", [&](NVGcontext* vg) {
-        nvgBeginPath(vg);
-        nvgRect(vg, 0, 0, 200, 200);
-        nvgFillPaint(vg, img_paint);
-        nvgFill(vg);
-        nvgClosePath(vg);
-
-
-        // nvgluBindFramebuffer(fb);
-        // nvgBeginFrame(vg, fb->image, 200, 200, 1.0f);
-        nvgBeginPath(vg);
-        nvgCircle(vg, 10, 10, 5);
-        nvgFillColor(vg, nvgRGBA(255, 0, 150, 155));
-        nvgFill(vg);
-        // nvgEndFrame(vg);
-        // nvgluBindFramebuffer(NULL);
-    },
+    RenderModule::RegisterNanoVGCallback("Red Circle", 
+        /* Render callback */
         [&](NVGcontext* vg) {
-            RenderModule::IsolatedFrameBuffer([&]() {
+            nvgBeginPath(vg);
+            nvgRect(vg, 0, 0, 200, 200);
+            nvgFillPaint(vg, img_paint);
+            nvgFill(vg);
+            nvgClosePath(vg);
+
+
+            // nvgluBindFramebuffer(fb);
+            // nvgBeginFrame(vg, fb->image, 200, 200, 1.0f);
+            nvgBeginPath(vg);
+            nvgCircle(vg, 10, 10, 5);
+            nvgFillColor(vg, nvgRGBA(255, 0, 150, 155));
+            nvgFill(vg);
+            // nvgEndFrame(vg);
+            // nvgluBindFramebuffer(NULL);
+        },
+        /* Offscreen callback */
+        [&](NVGcontext* vg) {
+            RenderModule::IsolatedFrameBuffer([&](NVGcontext* vg) {
                 nvg::GLUtilsBindFramebuffer(fb);
                 glad::glViewport(0, 0, width, height);
                 // glad::glClearColor(0, 0, 0, 0);
