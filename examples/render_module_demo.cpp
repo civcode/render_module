@@ -2,9 +2,6 @@
 
 #include <math.h>
 #include <iostream>
-// #include <imgui.h>
-// #include <implot.h>
-// #include "nanovg.h"
 
 // shared state
 float g_speed = 1.0f;
