@@ -82,19 +82,19 @@ int main() {
     );
         
 
-    // RenderModule::RegisterImGuiCallback([&]() {
-    //     // ImGui::Begin("Main Window", nullptr, ImGuiWindowFlags_MenuBar);
-    //     ImGui::Begin("Main Text Window", nullptr);
-    //     ImGui::TextWrapped(
-    //         "CJK text will only appear if the font was loaded with the appropriate CJK character ranges. "
-    //         "Call io.Fonts->AddFontFromFileTTF() manually to load extra character ranges. "
-    //         "Read docs/FONTS.md for details.");
-    //     ImGui::Text("Hiragana: \xe3\x81\x8b\xe3\x81\x8d\xe3\x81\x8f\xe3\x81\x91\xe3\x81\x93 (kakikukeko)");
-    //     ImGui::Text("Kanjis: \xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e (nihongo)");
-    //     static char buf[32] = "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e";
-    //     ImGui::InputText("UTF-8 input", buf, IM_ARRAYSIZE(buf));
-    //     ImGui::End();
-    // });
+    RenderModule::RegisterImGuiCallback([&]() {
+        // ImGui::Begin("Main Window", nullptr, ImGuiWindowFlags_MenuBar);
+        ImGui::Begin("Main Text Window", nullptr);
+        ImGui::TextWrapped(
+            "CJK text will only appear if the font was loaded with the appropriate CJK character ranges. "
+            "Call io.Fonts->AddFontFromFileTTF() manually to load extra character ranges. "
+            "Read docs/FONTS.md for details.");
+        ImGui::Text("Hiragana: \xe3\x81\x8b\xe3\x81\x8d\xe3\x81\x8f\xe3\x81\x91\xe3\x81\x93 (kakikukeko)");
+        ImGui::Text("Kanjis: \xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e (nihongo)");
+        static char buf[32] = "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e";
+        ImGui::InputText("UTF-8 input", buf, IM_ARRAYSIZE(buf));
+        ImGui::End();
+    });
     
     RenderModule::Run();
     RenderModule::Shutdown();

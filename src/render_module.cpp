@@ -103,6 +103,7 @@ void RenderModule::Init(int width, int height, double fps, const char* title) {
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
     ctx.window = glfwCreateWindow(width, height, title, nullptr, nullptr);
     glfwMakeContextCurrent(ctx.window);
     gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
@@ -110,10 +111,14 @@ void RenderModule::Init(int width, int height, double fps, const char* title) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 8.0f;
-    style.FrameRounding = 8.0f;
-    style.GrabRounding = 6.0f;
-    style.ScrollbarRounding = 8.0f;
+    // style.WindowRounding = 8.0f;
+    // style.FrameRounding = 8.0f;
+    // style.GrabRounding = 6.0f;
+    // style.ScrollbarRounding = 8.0f;
+    style.WindowRounding = 5.0f;
+    style.FrameRounding = 5.0f;
+    style.GrabRounding = 5.0f;
+    style.ScrollbarRounding = 5.0f;
     ImVec4 bg = ImVec4(0.95f, 0.95f, 0.98f, 1.0f);
     style.Colors[ImGuiCol_WindowBg] = bg;
 
