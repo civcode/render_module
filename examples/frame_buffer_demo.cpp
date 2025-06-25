@@ -41,19 +41,21 @@ int main() {
     }
 
     RenderModule::RegisterNanoVGCallback("Red Circle", 
-        /* Render callback */
+        /* Render callback */ 
         [&](NVGcontext* vg) {
-            /* Render the image created from the FB */
-            nvg::BeginPath();
-            nvg::Rect(0, 0, 200, 200);
-            nvg::FillPaint(img_paint);
-            nvg::Fill();
+            RenderModule::ZoomView([&](NVGcontext* vg) {
+                /* Render the image created from the FB */
+                nvg::BeginPath();
+                nvg::Rect(0, 0, 200, 200);
+                nvg::FillPaint(img_paint);
+                nvg::Fill();
 
-            /* Draw on the same gl context */
-            nvg::BeginPath();
-            nvg::Circle(10, 10, 5);
-            nvg::FillColor(nvgRGBA(255, 0, 150, 155));
-            nvg::Fill();
+                /* Draw on the same gl context */
+                nvg::BeginPath();
+                nvg::Circle(10, 10, 5);
+                nvg::FillColor(nvgRGBA(255, 0, 150, 155));
+                nvg::Fill();
+            });
         },
         /* Offscreen callback */
         [&](NVGcontext* vg) {
