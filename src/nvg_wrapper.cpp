@@ -6,6 +6,9 @@ static NVGcontext* g_ctx = nullptr;
 
 void SetContext(NVGcontext* ctx) { g_ctx = ctx; }
 
+void BeginFrame(int width, int height, float pixelRatio) { nvgBeginFrame(g_ctx, width, height, pixelRatio); }
+void EndFrame() { nvgEndFrame(g_ctx);  }
+
 // Drawing
 void BeginPath() { nvgBeginPath(g_ctx); }
 void Circle(float cx, float cy, float r) { nvgCircle(g_ctx, cx, cy, r); }

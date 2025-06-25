@@ -1,7 +1,8 @@
 {
     "C_Cpp.default.compileCommands": "${workspaceFolder}/builddir/compile_commands.json",
     "files.associations": {
-        "sstream": "cpp"
+        "sstream": "cpp",
+        "streambuf": "cpp"
     }
 
 }

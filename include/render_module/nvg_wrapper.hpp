@@ -3,13 +3,16 @@
 
 #include <glad/glad.h>
 #include "nanovg.h"
-// #include "nanovg_gl.h"
+#include "nanovg_gl.h"
 #include "nanovg_gl_utils.h"
 
 namespace nvg {
 
 // Context
 void SetContext(NVGcontext* ctx);
+
+void BeginFrame(int width, int height, float pixelRatio);
+void EndFrame();
 
 // Drawing
 void BeginPath();

@@ -19,7 +19,7 @@ struct NVGcontext;
 class RenderModule {
 public:
     static void Init(int width, int height, double fps = 30.0, const char* title = "RenderModule");
-    static void EnableParentWindowDocking();
+    static void EnableRootWindowDocking();
     static void RegisterImGuiCallback(std::function<void()> callback);
     static void RegisterNanoVGCallback(const std::string& name, 
                                         std::function<void(NVGcontext*)> callback,

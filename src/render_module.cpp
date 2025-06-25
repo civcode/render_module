@@ -13,8 +13,8 @@
 // #define NANOVG_GL3_IMPLEMENTATION
 // #include "nanovg.h"
 // #include "nanovg_gl.h"
-#include "nanovg_gl.h"
-#include "nanovg_gl_utils.h"
+// #include "nanovg_gl.h"
+// #include "nanovg_gl_utils.h"
 
 #include "render_module/zoom_view.hpp"
 
@@ -42,7 +42,7 @@ static struct {
 } ctx;
 
 static struct {
-    bool parent_window_docking_enabled = false;
+    bool rootWindowDockingEnabled = false;
 } settings;
 
 static void CreateFBO(PaintWindow& win, int width, int height) {
@@ -141,8 +141,8 @@ void RenderModule::Init(int width, int height, double fps, const char* title) {
     LoadFonts(ctx.vg);
 }
 
-void RenderModule::EnableParentWindowDocking() {
-    settings.parent_window_docking_enabled = true;
+void RenderModule::EnableRootWindowDocking() {
+    settings.rootWindowDockingEnabled = true;
 }
 
 void RenderModule::RegisterImGuiCallback(std::function<void()> callback) {
@@ -190,10 +190,11 @@ void RenderModule::Run() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        if (settings.parent_window_docking_enabled) {
+        if (settings.rootWindowDockingEnabled) {
             /* Enable docking w.r.t. the parent GLFW window */
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+            // ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
             ImGui::Begin("Main DockSpace Window", nullptr, 
                 // ImGuiWindowFlags_MenuBar | 
                 ImGuiWindowFlags_NoDocking |
@@ -203,9 +204,10 @@ void RenderModule::Run() {
                 ImGuiWindowFlags_NoMove |
                 ImGuiWindowFlags_NoBringToFrontOnFocus |
                 ImGuiWindowFlags_NoNavFocus);
+            // ImGui::PopStyleColor();
             ImGui::SetWindowPos(ImVec2(0, 0));
             ImGui::SetWindowSize(ImGui::GetIO().DisplaySize);
-            // ImGui::SetNextWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x/3, ImGui::GetIO().DisplaySize.y), ImGuiCond_Always);
+
             ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
             ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
             ImGui::PopStyleVar(2);
