@@ -57,7 +57,10 @@ int main() {
                 nvg::FillColor(nvgRGBA(255, 0, 150, 155));
                 nvg::Fill();
 
-                
+                float scale = ZoomView::GetScale();
+                ImVec2 offset = ZoomView::GetOffset();
+                std::cout << "Zoom: " << scale << ", Offset: (" 
+                          << offset.x << ", " << offset.y << ")" << std::endl;
             });
         },
         /* Offscreen callback */

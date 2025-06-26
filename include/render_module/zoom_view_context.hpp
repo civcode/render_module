@@ -18,14 +18,14 @@ extern State* currentState;
 
 extern std::unordered_map<std::string, State> stateMap;
 
-ImVec2 GetOffset() {
+inline ImVec2 GetOffset() {
     if (currentState) {
         return currentState->offset;
     }
     return ImVec2(0.0f, 0.0f);
 }
 
-float GetZoom() {
+inline float GetScale() {
     if (currentState) {
         return currentState->zoom;
     }
