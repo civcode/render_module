@@ -56,6 +56,8 @@ int main() {
                 nvg::Circle(10, 10, 5);
                 nvg::FillColor(nvgRGBA(255, 0, 150, 155));
                 nvg::Fill();
+
+                
             });
         },
         /* Offscreen callback */

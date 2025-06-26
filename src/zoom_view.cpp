@@ -1,22 +1,26 @@
 #include "render_module/zoom_view.hpp"
 #include <cmath>
-#include <unordered_map>
-#include <sstream>
+// #include <unordered_map>
+// #include <sstream>
 #include <iomanip>
 
 #include "render_module/render_context.hpp"
+#include "render_module/zoom_view_context.hpp"
 
 namespace ZoomView {
 
-struct State {
-    float zoom = 1.0f;
-    ImVec2 offset = {0.0f, 0.0f};
-};
+// struct State {
+//     float zoom = 1.0f;
+//     ImVec2 offset = {0.0f, 0.0f};
+// };
 
-static std::unordered_map<std::string, State> stateMap;
+State* currentState = nullptr;
+
+std::unordered_map<std::string, State> stateMap;
 
 void Draw(const std::string& label, NVGcontext* vg, std::function<void(NVGcontext*)> drawCallback) {
     State& state = stateMap[label];
+    currentState = &state;
 
     ImVec2 canvasPos = ImGui::GetCursorScreenPos();
     ImVec2 canvasSize = ImGui::GetContentRegionAvail();
@@ -99,6 +103,8 @@ void Draw(const std::string& label, NVGcontext* vg, std::function<void(NVGcontex
     nvgText(vg, x0+3, y0+30, oss.str().c_str(), nullptr);
 
     nvgRestore(vg);
+
+    currentState = nullptr;
     // ImGui::EndChild(); // End canvas child
 }
 } // namespace ZoomView
