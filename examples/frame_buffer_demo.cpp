@@ -43,6 +43,7 @@ int main() {
     RenderModule::RegisterNanoVGCallback("Red Circle", 
         /* Render callback */ 
         [&](NVGcontext* vg) {
+            // ScopedViewPortLock lock;
             RenderModule::ZoomView([&](NVGcontext* vg) {
                 /* Render the image created from the FB */
                 nvg::BeginPath();
@@ -81,6 +82,23 @@ int main() {
         }
     );
         
+    RenderModule::RegisterImGuiCallback([&]() {
+        ImGui::Begin("Controls", nullptr, ImGuiWindowFlags_MenuBar);
+        if (ImGui::BeginMenuBar()) {
+            if (ImGui::BeginMenu("File")) {
+                if (ImGui::MenuItem("Exit")) {
+                    // glfwSetWindowShouldClose(RenderModule::GetGLFWWindow(), true);
+                }
+                ImGui::EndMenu();
+            }
+            ImGui::EndMenuBar();
+        }
+        if (ImGui::Button(RenderContext::Instance().disableViewportControls 
+                ? "Enable Viewport Controls" : "Disable Viewport Controls")) {
+            RenderContext::Instance().disableViewportControls = !RenderContext::Instance().disableViewportControls;
+        }
+        ImGui::End();
+    });
 
     RenderModule::RegisterImGuiCallback([&]() {
         // ImGui::Begin("Main Window", nullptr, ImGuiWindowFlags_MenuBar);

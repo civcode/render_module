@@ -13,6 +13,7 @@
 
 #include "render_module/nvg_wrapper.hpp"
 #include "render_module/glad_wrapper.hpp"
+#include "render_module/render_context.hpp"
 
 struct NVGcontext;
 
