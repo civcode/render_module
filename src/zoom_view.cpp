@@ -44,10 +44,11 @@ void Draw(const std::string& label, NVGcontext* vg, std::function<void(NVGcontex
     if (hovering && ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
         float wheel = ImGui::GetIO().MouseWheel;
         if (wheel != 0.0f) {
-            float zoomFactor = 1.3f;
+            // float zoomFactor = 1.3f;
+            float zoomFactor = state.zoomFactor;
             float prevZoom = state.zoom;
             float newZoom = (wheel > 0) ? state.zoom * zoomFactor : state.zoom / zoomFactor;
-            newZoom = std::max(0.27f, newZoom); // Prevent zooming out too much
+            newZoom = std::min(state.maxZoom, std::max(state.minZoom, newZoom));
 
             ImVec2 mouse = ImGui::GetIO().MousePos;
             ImVec2 canvasTopLeft = ImGui::GetCursorScreenPos();

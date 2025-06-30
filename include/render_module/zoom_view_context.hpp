@@ -11,6 +11,9 @@ namespace ZoomView {
 struct State {
     float zoom = 1.0f;
     ImVec2 offset = {0.0f, 0.0f};
+    float minZoom = 0.50f;
+    float maxZoom = 16.0f;
+    float zoomFactor = 2.0f;
 };
 
 
@@ -50,6 +53,13 @@ inline void CanvasToView(T& x, T& y) {
     }
 }
 
+template <typename T>
+inline void CanvasToView(T& distance) {
+    if (currentState) {
+        distance /= currentState->zoom;
+    }
+}
+
 inline ImVec2 ViewToCanvas(const ImVec2& zoomViewPos) {
     if (currentState) {
         return ImVec2(
@@ -65,6 +75,13 @@ inline void ViewToCanvas(T& x, T& y) {
     if (currentState) {
         x = x * currentState->zoom + currentState->offset.x;
         y = y * currentState->zoom + currentState->offset.y;
+    }
+}
+
+template <typename T>
+inline void ViewToCanvas(T& distance) {
+    if (currentState) {
+        distance *= currentState->zoom;
     }
 }
 
