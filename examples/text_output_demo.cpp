@@ -114,6 +114,7 @@ int main() {
         ImGui::Text("Kanjis: \xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e (nihongo)");
         static char buf[32] = "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e";
         ImGui::InputText("UTF-8 input", buf, IM_ARRAYSIZE(buf));
+        ImGui::Text("FPS: %.2f", RenderModule::GetFPS());
         ImGui::End();
 
     });

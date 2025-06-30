@@ -32,6 +32,7 @@ public:
     static void Shutdown();
     static ImVec2ih GetGLFWWindowSize();
     static NVGcontext* GetNanoVGContext();
+    static double GetFPS();
 };
 
 #endif // PLOTAPP_HPP_

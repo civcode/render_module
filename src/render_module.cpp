@@ -35,13 +35,27 @@ static struct {
     NVGcontext* vg;
     std::vector<std::function<void()>> imguiCallbacks;
     std::vector<PaintWindow> paintWindows;
-    double fps;
+    double fps_setpoint;
+    double fps_current = 0.0;
 
 } ctx;
 
 static struct {
     bool rootWindowDockingEnabled = false;
 } settings;
+
+static struct LowPassFilter {
+    double alpha = 0.005; // Smoothing factor
+    double value = 0.0;
+
+    void Update(double new_value) {
+        value = (1.0 - alpha) * value + alpha * new_value;
+    }
+
+    double GetValue() const {
+        return value;
+    }
+} fps_filter;
 
 static void CreateFBO(PaintWindow& win, int width, int height) {
     if (win.texture) {
@@ -98,7 +112,7 @@ static void LoadFonts(NVGcontext* vg) {
 }
 
 void RenderModule::Init(int width, int height, double fps, const char* title) {
-    ctx.fps = fps;
+    ctx.fps_setpoint = fps;
 
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -305,9 +319,11 @@ void RenderModule::Run() {
         glfwSwapBuffers(ctx.window);
 
         double delta_time = glfwGetTime() - prev_frame_time;
+        ctx.fps_current = 1.0 / delta_time;
+        fps_filter.Update(ctx.fps_current);
         prev_frame_time += delta_time;
-        if (ctx.fps != 0 && delta_time < 1.0 / ctx.fps) {
-            double sleep_time = 1.0 / ctx.fps - delta_time;
+        if (ctx.fps_setpoint != 0 && delta_time < 1.0 / ctx.fps_setpoint) {
+            double sleep_time = 1.0 / ctx.fps_setpoint - delta_time;
             /* glfwWaitEventsTimeout makes the app more respoinsive */
             /* the render loop only sleeps if there are no events, e.g. mouse movement */
             glfwWaitEventsTimeout(sleep_time);
@@ -357,4 +373,10 @@ ImVec2ih RenderModule::GetGLFWWindowSize() {
 NVGcontext *RenderModule::GetNanoVGContext()
 {
     return ctx.vg;
+}
+
+double RenderModule::GetFPS()
+{
+    return ctx.fps_current;;
+    // return fps_filter.GetValue();
 }
