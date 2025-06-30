@@ -32,7 +32,7 @@ inline float GetScale() {
     return 1.0f;    
 }
 
-inline ImVec2 CanvasToZoomView(const ImVec2& canvasPos) {
+inline ImVec2 CanvasToView(const ImVec2& canvasPos) {
     if (currentState) {
         return ImVec2(
             (canvasPos.x - currentState->offset.x) / currentState->zoom,
@@ -43,14 +43,14 @@ inline ImVec2 CanvasToZoomView(const ImVec2& canvasPos) {
 }
 
 template <typename T>
-inline void CanvasToZoomView(T& x, T& y) {
+inline void CanvasToView(T& x, T& y) {
     if (currentState) {
         x = (x - currentState->offset.x) / currentState->zoom;
         y = (y - currentState->offset.y) / currentState->zoom;
     }
 }
 
-inline ImVec2 ZoomViewToCanvas(const ImVec2& zoomViewPos) {
+inline ImVec2 ViewToCanvas(const ImVec2& zoomViewPos) {
     if (currentState) {
         return ImVec2(
             zoomViewPos.x * currentState->zoom + currentState->offset.x,
@@ -61,7 +61,7 @@ inline ImVec2 ZoomViewToCanvas(const ImVec2& zoomViewPos) {
 }
 
 template <typename T>
-inline void ZoomViewToCanvas(T& x, T& y) {
+inline void ViewToCanvas(T& x, T& y) {
     if (currentState) {
         x = x * currentState->zoom + currentState->offset.x;
         y = y * currentState->zoom + currentState->offset.y;
