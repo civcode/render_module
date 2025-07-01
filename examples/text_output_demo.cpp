@@ -8,7 +8,40 @@
 class DebugConsole
 {
 public:
-    void AddLog(const char* fmt, ...) IM_FMTARGS(2)
+    // Nested ImGuiStreamBuf class
+    class ImGuiStreamBuf : public std::streambuf {
+    public:
+        ImGuiStreamBuf(DebugConsole& console) : console(console) {}
+
+    protected:
+        int overflow(int c) override {
+            if (c != EOF) {
+                buffer += static_cast<char>(c);
+                if (c == '\n') {
+                    flushBuffer();
+                }
+            }
+            return c;
+        }
+
+        int sync() override {
+            flushBuffer();
+            return 0;
+        }
+
+    private:
+        void flushBuffer() {
+            if (!buffer.empty()) {
+                console.Log("%s", buffer.c_str());
+                buffer.clear();
+            }
+        }
+
+        std::string buffer;
+        DebugConsole& console;
+    };
+
+    void Log(const char* fmt, ...) IM_FMTARGS(2)
     {
         char buf[1024];
         va_list args;
@@ -26,22 +59,40 @@ public:
         logs.clear();
     }
 
-    void Draw(const char* title, bool* p_open = nullptr)
+    void Render(const char* title = "Debug Console", bool* p_open = nullptr)
     {
+        static bool wordWrap = true;
+
         if (!ImGui::Begin(title, p_open))
         {
             ImGui::End();
             return;
         }
 
-        if (ImGui::Button("Clear")) Clear();
+        ImGui::Text("FPS: %.2f", RenderModule::GetFPS());
         ImGui::Separator();
 
-        ImGui::BeginChild("ScrollingRegion", ImVec2(0, 0), false,
+        if (ImGui::Button("Clear")) Clear();
+        ImGui::SameLine();
+        if (ImGui::Button(wordWrap ? "Wrap: ON" : "Wrap: OFF"))
+            wordWrap = !wordWrap;
+        ImGui::Separator();
+
+        ImVec2 child_size = ImVec2(0, 0);
+        ImGui::BeginChild("ScrollingRegion", child_size, false,
                           ImGuiWindowFlags_HorizontalScrollbar);
+
+        if (wordWrap)
+        {
+            float wrap_width = ImGui::GetContentRegionAvail().x;
+            ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + wrap_width);
+        }
 
         for (const auto& line : logs)
             ImGui::TextUnformatted(line.c_str());
+
+        if (wordWrap)
+            ImGui::PopTextWrapPos();
 
         if (scrollToBottom)
             ImGui::SetScrollHereY(1.0f);
@@ -51,12 +102,22 @@ public:
         ImGui::End();
     }
 
-    // void spin_once()
-    // {
-    //     static int cnt;
-    //     AddLog("Debug Console entry %d.", cnt++);
-    //     Draw("Debug Console");
-    // }
+    void SetCoutRedirect(bool enable)
+    {
+        static std::streambuf* oldCoutBuf = nullptr;
+        static ImGuiStreamBuf* imguiBuf = nullptr;
+
+        if (enable) {
+            if (!imguiBuf)
+                imguiBuf = new ImGuiStreamBuf(*this);
+            if (!oldCoutBuf)
+                oldCoutBuf = std::cout.rdbuf();
+            std::cout.rdbuf(imguiBuf);
+        } else {
+            if (oldCoutBuf)
+                std::cout.rdbuf(oldCoutBuf);
+        }
+    }
 
 private:
     std::vector<std::string> logs;
@@ -65,37 +126,6 @@ private:
 
 
 
-class ImGuiStreamBuf : public std::streambuf {
-public:
-    ImGuiStreamBuf(DebugConsole& console) : console(console) {}
-
-protected:
-    int overflow(int c) override {
-        if (c != EOF) {
-            buffer += static_cast<char>(c);
-            if (c == '\n') {
-                flushBuffer();
-            }
-        }
-        return c;
-    }
-
-    int sync() override {
-        flushBuffer();
-        return 0;
-    }
-
-private:
-    void flushBuffer() {
-        if (!buffer.empty()) {
-            console.AddLog("%s", buffer.c_str());
-            buffer.clear();
-        }
-    }
-
-    std::string buffer;
-    DebugConsole& console;
-};
 
 
 
@@ -131,20 +161,22 @@ int main() {
 
     // static DebugConsole console;
     DebugConsole console;
-    ImGuiStreamBuf imguiBuf(console);
-    console.AddLog("Application started...");
-    console.AddLog("Debug Console initialized.");
+    // ImGuiStreamBuf imguiBuf(console);
+    console.Log("Application started...");
+    console.Log("Debug Console initialized.");
 
-    std::streambuf* oldCoutBuf = std::cout.rdbuf(&imguiBuf); 
+    // std::streambuf* oldCoutBuf = std::cout.rdbuf(&imguiBuf); 
+    console.SetCoutRedirect(true);
     std::cout << "Redirecting std::cout to ImGui Debug Console..." << std::endl;
     std::cout << "Hello, world!" << std::endl;
-    std::cout.rdbuf(oldCoutBuf);
-
+    // std::cout.rdbuf(oldCoutBuf);
+    console.SetCoutRedirect(false);
+    
     RenderModule::RegisterImGuiCallback([&console]() {
         static int cnt;
         if (cnt < 10)
-            console.AddLog("Debug Console entry %d.", cnt++);
-        console.Draw("Debug Console");
+            console.Log("Debug Console entry %d.", cnt++);
+        console.Render("Debug Console");
     });
 
 

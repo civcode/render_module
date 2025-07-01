@@ -223,4 +223,8 @@ target_link_libraries(TextOutputDemo PRIVATE RenderModule)
 add_executable(FrameBufferDemo examples/frame_buffer_demo.cpp)
 target_include_directories(FrameBufferDemo PRIVATE ${EXAMPLE_INLUDES})
 target_link_libraries(FrameBufferDemo PRIVATE RenderModule)
+
+add_executable(DebugConsoleDemo examples/debug_console_demo.cpp)
+target_include_directories(DebugConsoleDemo PRIVATE ${EXAMPLE_INLUDES})
+target_link_libraries(DebugConsoleDemo PRIVATE RenderModule)
 # === ===
