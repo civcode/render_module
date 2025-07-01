@@ -1,17 +1,19 @@
-#include "render_module/render_module.hpp"
+#ifndef DEBUG_CONSOLE_HPP_
+#define DEBUG_CONSOLE_HPP_
 
 #include <iostream>
-#include <vector>
 #include <string>
 #include <streambuf>
 
-class MyDebugConsole
+#include "render_module/render_module.hpp"
+
+class DebugConsole
 {
 public:
     // Nested ImGuiStreamBuf class
-    class MyImGuiStreamBuf : public std::streambuf {
+    class ImGuiStreamBuf : public std::streambuf {
     public:
-        MyImGuiStreamBuf(MyDebugConsole& console) : console(console) {}
+        ImGuiStreamBuf(DebugConsole& console) : console(console) {}
 
     protected:
         int overflow(int c) override {
@@ -38,8 +40,16 @@ public:
         }
 
         std::string buffer;
-        MyDebugConsole& console;
+        DebugConsole& console;
     };
+
+
+    /* Accessor to the global instance */
+    static DebugConsole& Console()
+    {
+        static DebugConsole instance;
+        return instance;
+    }
 
     void Log(const char* fmt, ...) IM_FMTARGS(2)
     {
@@ -69,8 +79,8 @@ public:
             return;
         }
 
-        ImGui::Text("FPS: %.2f", RenderModule::GetFPS());
-        ImGui::Separator();
+        // ImGui::Text("FPS: %.2f", RenderModule::GetFPS());
+        // ImGui::Separator();
 
         if (ImGui::Button("Clear")) Clear();
         ImGui::SameLine();
@@ -105,11 +115,11 @@ public:
     void SetCoutRedirect(bool enable)
     {
         static std::streambuf* oldCoutBuf = nullptr;
-        static MyImGuiStreamBuf* imguiBuf = nullptr;
+        static ImGuiStreamBuf* imguiBuf = nullptr;
 
         if (enable) {
             if (!imguiBuf)
-                imguiBuf = new MyImGuiStreamBuf(*this);
+                imguiBuf = new ImGuiStreamBuf(*this);
             if (!oldCoutBuf)
                 oldCoutBuf = std::cout.rdbuf();
             std::cout.rdbuf(imguiBuf);
@@ -124,67 +134,4 @@ private:
     bool scrollToBottom = false;
 };
 
-
-
-
-
-
-int main() {
-    RenderModule::Init(980, 720);
-
-    RenderModule::RegisterImGuiCallback([]() {
-
-        // ImGui::Begin("Main Window", nullptr, ImGuiWindowFlags_MenuBar);
-        ImGui::Begin("Main Text Window", nullptr);
-        ImGui::TextWrapped(
-            "CJK text will only appear if the font was loaded with the appropriate CJK character ranges. "
-            "Call io.Fonts->AddFontFromFileTTF() manually to load extra character ranges. "
-            "Read docs/FONTS.md for details.");
-        ImGui::Text("Hiragana: \xe3\x81\x8b\xe3\x81\x8d\xe3\x81\x8f\xe3\x81\x91\xe3\x81\x93 (kakikukeko)");
-        ImGui::Text("Kanjis: \xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e (nihongo)");
-        static char buf[32] = "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e";
-        ImGui::InputText("UTF-8 input", buf, IM_ARRAYSIZE(buf));
-        ImGui::Text("FPS: %.2f", RenderModule::GetFPS());
-        ImGui::End();
-
-    });
-
-    RenderModule::RegisterImGuiCallback([]() {
-        ImGui::Begin("Main Window 2", nullptr);
-        ImGui::TextWrapped(
-            "This is a second window with some text. "
-            "It will also display CJK characters if the font supports them.");
-        ImGui::Text("Hiragana: \xe3\x81\x8b\xe3\x81\x8d\xe3\x81\x8f\xe3\x81\x91\xe3\x81\x93 (kakikukeko)");
-        ImGui::Text("Kanjis: \xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e (nihongo)");
-        ImGui::End();
-    });
-
-    // static DebugConsole console;
-    MyDebugConsole console;
-    // ImGuiStreamBuf imguiBuf(console);
-    console.Log("Application started...");
-    console.Log("Debug Console initialized.");
-
-    // std::streambuf* oldCoutBuf = std::cout.rdbuf(&imguiBuf); 
-    console.SetCoutRedirect(true);
-    std::cout << "Redirecting std::cout to ImGui Debug Console..." << std::endl;
-    std::cout << "Hello, world!" << std::endl;
-    // std::cout.rdbuf(oldCoutBuf);
-    console.SetCoutRedirect(false);
-    
-    RenderModule::RegisterImGuiCallback([&console]() {
-        static int cnt;
-        if (cnt < 10)
-            console.Log("Debug Console entry %d.", cnt++);
-        console.Render("Debug Console");
-    });
-
-
-
-
-
-    
-    RenderModule::Run();
-    RenderModule::Shutdown();
-    return 0;
-}
+#endif // DEBUG_CONSOLE_HPP_

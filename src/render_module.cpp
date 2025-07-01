@@ -16,6 +16,8 @@
 
 #include "render_module/zoom_view.hpp"
 
+DebugConsole RenderModule::console_;
+
 namespace {
     thread_local std::stack<std::string> label_stack;
 }
@@ -42,6 +44,7 @@ static struct {
 
 static struct {
     bool rootWindowDockingEnabled = false;
+    bool renderDebugConsole = false;
 } settings;
 
 static struct LowPassFilter {
@@ -268,6 +271,9 @@ void RenderModule::Run() {
 
 
 
+        if (settings.renderDebugConsole) {
+            RenderModule::Console().Render("Debug Console");
+        }
 
         for (auto& cb : ctx.imguiCallbacks)
             cb();
@@ -379,4 +385,13 @@ double RenderModule::GetFPS()
 {
     return ctx.fps_current;;
     // return fps_filter.GetValue();
+}
+
+DebugConsole& RenderModule::Console() {
+    return console_;
+}
+
+void RenderModule::EnableDebugConsole()
+{
+    settings.renderDebugConsole = true;
 }

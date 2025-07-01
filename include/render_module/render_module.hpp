@@ -1,5 +1,5 @@
-#ifndef PLOTAPP_HPP_
-#define PLOTAPP_HPP_
+#ifndef RENDER_MODULE_HPP_
+#define RENDER_MODULE_HPP_
 
 #include <functional>
 #include <vector>
@@ -15,6 +15,7 @@
 #include "render_module/glad_wrapper.hpp"
 #include "render_module/render_context.hpp"
 #include "render_module/zoom_view_context.hpp"
+#include "render_module/debug_console.hpp"
 
 struct NVGcontext;
 
@@ -33,6 +34,12 @@ public:
     static ImVec2ih GetGLFWWindowSize();
     static NVGcontext* GetNanoVGContext();
     static double GetFPS();
+
+    static DebugConsole& Console();
+    static void EnableDebugConsole();
+
+private:
+    static DebugConsole console_;
 };
 
-#endif // PLOTAPP_HPP_
+#endif // RENDER_MODULE_HPP_
