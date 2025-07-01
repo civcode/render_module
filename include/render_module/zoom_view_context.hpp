@@ -8,12 +8,24 @@
 
 namespace ZoomView {
 
+enum Flags {
+    kNone = 0,
+    // kDisableZoom = 1 << 0,
+    // kDisablePan = 1 << 1,
+    // kDisableMouseWheel = 1 << 2,
+    // kDisableKeyboard = 1 << 3,
+    // kDisableDrag = 1 << 4,
+    kOnceOnly = 1 << 5
+};
+
 struct State {
     float zoom = 1.0f;
     ImVec2 offset = {0.0f, 0.0f};
     float minZoom = 0.50f;
     float maxZoom = 16.0f;
     float zoomFactor = 2.0f;
+    Flags offset_flags = Flags::kNone;
+    Flags scale_flags = Flags::kNone;
 };
 
 
@@ -28,11 +40,35 @@ inline ImVec2 GetOffset() {
     return ImVec2(0.0f, 0.0f);
 }
 
+inline void SetOffset(const ImVec2& offset, Flags flags = Flags::kNone) {
+    if ((flags & Flags::kOnceOnly) == Flags::kOnceOnly) {
+        if (currentState && currentState->offset_flags & Flags::kOnceOnly) {
+            return; // Do not change offset if already set once
+        }
+    }
+    if (currentState) {
+        currentState->offset = offset;
+        currentState->offset_flags = flags;
+    }
+}
+
 inline float GetScale() {
     if (currentState) {
         return currentState->zoom;
     }
     return 1.0f;    
+}
+
+inline void SetScale(float scale, Flags flags = Flags::kNone) {
+    if ((flags & Flags::kOnceOnly) == Flags::kOnceOnly) {
+        if (currentState && currentState->scale_flags & Flags::kOnceOnly) {
+            return; // Do not change scale if already set once
+        }
+    }
+    if (currentState) {
+        currentState->zoom = scale;
+        currentState->scale_flags = flags;
+    }
 }
 
 inline ImVec2 CanvasToView(const ImVec2& canvasPos) {
