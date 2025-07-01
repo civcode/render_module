@@ -78,6 +78,7 @@ file(GLOB SRC_FILES
     ${CMAKE_SOURCE_DIR}/src/render_module.cpp
     ${CMAKE_SOURCE_DIR}/src/nvg_wrapper.cpp
     ${CMAKE_SOURCE_DIR}/src/zoom_view.cpp
+    ${CMAKE_SOURCE_DIR}/src/debug_console.cpp
     ${imgui_SOURCE_DIR}/*.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp

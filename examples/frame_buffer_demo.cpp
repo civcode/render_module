@@ -1,4 +1,5 @@
 #include "render_module/render_module.hpp"
+#include "render_module/glad_wrapper.hpp"
 
 #include <iostream>
 

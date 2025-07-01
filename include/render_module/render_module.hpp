@@ -12,7 +12,7 @@
 #include "nanovg.h"
 
 #include "render_module/nvg_wrapper.hpp"
-#include "render_module/glad_wrapper.hpp"
+// #include "render_module/glad_wrapper.hpp"
 #include "render_module/render_context.hpp"
 #include "render_module/zoom_view_context.hpp"
 #include "render_module/debug_console.hpp"
