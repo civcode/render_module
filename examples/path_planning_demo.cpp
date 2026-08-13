@@ -1,6 +1,8 @@
 #include "render_module/pose_tool.hpp"
 #include "render_module/render_module.hpp"
 
+#include <imgui_internal.h>
+
 #include <cmath>
 
 namespace {
@@ -19,6 +21,9 @@ int main() {
     if (!RenderModule::Init(1100, 760, 60.0, "Path planning interaction")) {
         return 1;
     }
+    // ImGuiStyle& style = ImGui::GetStyle();
+    // style.Colors[ImGuiCol_DockingEmptyBg] = ImVec4(0.35f, 0.36f, 0.39f, 1.0f);
+    // style.Colors[ImGuiCol_WindowBg] = ImVec4(0.35f, 0.36f, 0.39f, 1.0f);
     RenderModule::EnableRootWindowDocking();
 
     PoseDragTool startTool;
@@ -64,6 +69,22 @@ int main() {
         }
         ImGui::End();
     });
+
+    static bool initialized = false;
+    const ImGuiID dockspaceId = RenderModule::GetRootDockspaceID();
+    if (!initialized && dockspaceId != 0) {
+        initialized = true;
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::DockBuilderRemoveNode(dockspaceId);
+        ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodeSize(dockspaceId, viewport->WorkSize);
+        ImGuiID centerNode = dockspaceId;
+        ImGuiID leftNode = ImGui::DockBuilderSplitNode(centerNode, ImGuiDir_Left, 0.75f, nullptr, &centerNode);
+        ImGuiID rightNode = ImGui::DockBuilderSplitNode(centerNode, ImGuiDir_Right, 0.25f, nullptr, &centerNode);
+        ImGui::DockBuilderDockWindow("Path tools", leftNode);
+        ImGui::DockBuilderDockWindow("Path planning map", centerNode);
+        ImGui::DockBuilderFinish(dockspaceId);
+    }
 
     RenderModule::RegisterCanvas("Path planning map", [&](Canvas& canvas) {
         canvas.DrawViewport("map", [&](Viewport& viewport) {

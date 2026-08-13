@@ -17,6 +17,8 @@
 
 struct NVGcontext;
 
+static ImGuiID GetRootDockspaceID();
+
 class RenderModule {
 public:
     using CanvasCallback = std::function<void(render_module::Canvas&)>;
@@ -44,6 +46,7 @@ public:
     static double GetFPS();
     static double GetDeltaTime();
     static bool IsInitialized();
+    static ImGuiID GetRootDockspaceID();
 
     static DebugConsole& Console();
     static void EnableDebugConsole();

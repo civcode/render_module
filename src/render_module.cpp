@@ -25,6 +25,8 @@ DebugConsole RenderModule::console_;
 
 namespace {
 
+ImGuiID rootDockspaceId = 0;
+
 struct PaintWindow {
     std::string name;
     RenderModule::CanvasCallback callback;
@@ -227,6 +229,14 @@ void DrawRootDockSpace() {
     ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f),
                      ImGuiDockNodeFlags_PassthruCentralNode);
     ImGui::End();
+
+    rootDockspaceId = ImGui::GetID("RenderModuleDockSpace");
+
+    ImGui::DockSpace(
+        rootDockspaceId,
+        ImVec2(0.0f, 0.0f),
+        ImGuiDockNodeFlags_None
+    );
 }
 
 void RenderPaintWindow(PaintWindow& window) {
@@ -562,6 +572,11 @@ double RenderModule::GetDeltaTime() {
 
 bool RenderModule::IsInitialized() {
     return ctx.initialized;
+}
+
+ImGuiID RenderModule::GetRootDockspaceID()
+{
+    return rootDockspaceId;
 }
 
 DebugConsole& RenderModule::Console() {
