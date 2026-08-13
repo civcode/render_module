@@ -225,18 +225,16 @@ void DrawRootDockSpace() {
 
     ImGui::Begin("##RenderModuleDockSpace", nullptr, flags);
     ImGui::PopStyleVar(3);
-    const ImGuiID dockspaceId = ImGui::GetID("RenderModuleDockSpace");
-    ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f),
-                     ImGuiDockNodeFlags_PassthruCentralNode);
-    ImGui::End();
-
+   
     rootDockspaceId = ImGui::GetID("RenderModuleDockSpace");
 
-    ImGui::DockSpace(
-        rootDockspaceId,
-        ImVec2(0.0f, 0.0f),
-        ImGuiDockNodeFlags_None
-    );
+    ImGui::DockSpace(rootDockspaceId, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
+    // const ImGuiID dockspaceId = ImGui::GetID("RenderModuleDockSpace");
+    // ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f),
+    //                  ImGuiDockNodeFlags_PassthruCentralNode);
+    ImGui::End();
+
+
 }
 
 void RenderPaintWindow(PaintWindow& window) {
