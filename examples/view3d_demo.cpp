@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <vector>
 
+#include <imgui_internal.h>
+
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
 }
@@ -17,6 +19,22 @@ int main() {
     render_module::Pose3D cameraPose{};
 
     RenderModule::RegisterImGuiCallback([&] {
+
+        static bool initialized = false;
+        const ImGuiID dockspaceId = RenderModule::GetRootDockspaceID();
+        if (!initialized && dockspaceId != 0) {
+            initialized = true;
+            // const ImGuiViewport* viewport = ImGui::GetMainViewport();
+            ImGui::DockBuilderRemoveNode(dockspaceId);
+            ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+            ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetMainViewport()->WorkSize);
+            ImGuiID centerNode = dockspaceId;
+            ImGuiID leftNode = ImGui::DockBuilderSplitNode(centerNode, ImGuiDir_Left, 0.7f, nullptr, &centerNode);
+            ImGui::DockBuilderDockWindow("3D Controls", centerNode);
+            ImGui::DockBuilderDockWindow("Localization 3D", leftNode);
+            ImGui::DockBuilderFinish(dockspaceId);
+        }
+
         ImGui::Begin("3D Controls");
         ImGui::TextUnformatted("3D viewport controls:");
         ImGui::BulletText("Right-drag: orbit");
