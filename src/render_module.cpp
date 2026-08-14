@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <thread>
 #include <vector>
 
 #include <glad/glad.h>
@@ -567,13 +568,15 @@ void RenderModule::ZoomView(std::function<void(NVGcontext*)> callback) {
 }
 
 void RenderModule::Run() {
+    using Clock = std::chrono::steady_clock;
+
     if (!ctx.initialized || !ctx.window) {
         std::fprintf(stderr, "RenderModule::Run called before successful Init.\n");
         return;
     }
 
     while (!glfwWindowShouldClose(ctx.window)) {
-        const double frameStart = glfwGetTime();
+        const auto frameStart = Clock::now();
         glfwPollEvents();
 
         int displayWidth = 0;
@@ -587,24 +590,31 @@ void RenderModule::Run() {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        if (settings.rootWindowDockingEnabled) DrawRootDockSpace();
-        if (settings.renderDebugConsole) Console().Render("Debug Console");
+        if (settings.rootWindowDockingEnabled) 
+            DrawRootDockSpace();
+        if (settings.renderDebugConsole) 
+            Console().Render("Debug Console");
 
-        for (const auto& callback : ctx.imguiCallbacks) callback();
-        for (PaintWindow& window : ctx.paintWindows) RenderPaintWindow(window);
-        for (View3DWindow& window : ctx.view3DWindows) Render3DWindow(window);
+        for (const auto& callback : ctx.imguiCallbacks) 
+            callback();
+        for (PaintWindow& window : ctx.paintWindows) 
+            RenderPaintWindow(window);
+        for (View3DWindow& window : ctx.view3DWindows) 
+            Render3DWindow(window);
 
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(ctx.window);
 
-        const double workTime = glfwGetTime() - frameStart;
-        if (ctx.fpsSetpoint > 0.0) {
-            const double remaining = 1.0 / ctx.fpsSetpoint - workTime;
-            if (remaining > 0.0) glfwWaitEventsTimeout(remaining);
+        if (ctx.fpsSetpoint > 0.0)         {
+            const auto framePeriod = std::chrono::duration<double>(1.0/ctx.fpsSetpoint);
+            std::this_thread::sleep_until(frameStart + 
+                std::chrono::duration_cast<Clock::duration>(framePeriod));
         }
 
-        ctx.deltaTime = std::max(glfwGetTime() - frameStart, 1.0e-9);
+        const auto frameEnd = Clock::now();
+        ctx.deltaTime = std::chrono::duration<double>(frameEnd - frameStart).count();
+        ctx.deltaTime = std::max(ctx.deltaTime, 1.0e-9);
         ctx.fpsCurrent = 1.0 / ctx.deltaTime;
     }
 }
