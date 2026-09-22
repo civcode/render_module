@@ -4,16 +4,37 @@
 
 The module has a small set of one-way-owned visualization layers:
 
-1. **RenderModule** owns GLFW, the OpenGL context, ImGui, the application loop, and registered windows.
+1. **RenderModule** owns private platform, input, and presenter interfaces, plus ImGui, the application loop, and registered windows.
 2. Each registered **Canvas** owns a 2D framebuffer, ImGui hit target, raw mouse snapshot, and persistent 2D viewport states.
 3. A 2D **Viewport** owns one world-to-canvas transform and arbitrates navigation versus content gestures.
 4. Each registered **View3D** owns persistent camera/input state and named dynamic GPU meshes while sharing the module-wide Magnum renderer.
 5. Tools such as **PoseDragTool** or application-side 3D picking code consume the corresponding viewport input and produce application data.
 
-The important rule is that GLFW/ImGui input is sampled once by the same
+The important rule is that ImGui input is sampled once by the same
 component that creates the canvas hit target. Lower layers never query window
 coordinates on their own. This removes the former implicit dependency between
 render_module.cpp and zoom_view.cpp.
+
+## Desktop backend (Phase 1)
+
+- `src/platform/platform_backend.hpp` defines `IGraphicsContext` and
+  `IPlatformBackend`: current-context/proc loading, lifetime, events, close state,
+  logical window size, and physical framebuffer size.
+- `GlfwDesktopBackend` owns GLFW and the window/context. The unchanged public
+  `Init(width, height, fps, title)` selects this backend.
+- `src/input/` adapts `imgui_impl_glfw` behind `IInputBackend`; it installs native
+  callbacks and supplies ImGui display size, framebuffer scale, and frame timing.
+- `src/present/` implements `IPresenter` with `DesktopPresenter`, which swaps the
+  GLFW default framebuffer after ImGui renders. No root FBO is introduced here.
+
+The core contains no GLFW calls or window pointer. Input and presentation borrow
+backend resources and are destroyed before the platform. Initialization, `Run()`,
+and `Shutdown()` make the owned GL context current; NanoVG, ImGui, and Magnum GPU
+resources are released before context destruction. Call these APIs on the same
+main/render thread. Existing Magnum external-state boundaries are unchanged.
+
+Headless/EGL, backend configuration, remote input, and streaming are deferred;
+these private interfaces do not advertise support for them yet.
 
 ## Frame flow
 

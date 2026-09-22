@@ -12,14 +12,15 @@
 #include <vector>
 
 #include <glad/glad.h>
-#include <GLFW/glfw3.h>
-#include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_opengl3.h>
 #include <implot.h>
 #define NANOVG_GL3_IMPLEMENTATION
 #include "nanovg_gl.h"
 #include "nanovg_gl_utils.h"
 
+#include "platform/platform_backend.hpp"
+#include "input/input_backend.hpp"
+#include "present/presenter.hpp"
 #include "canvas_internal.hpp"
 #include "view3d_internal.hpp"
 #include "render_module/zoom_view.hpp"
@@ -55,7 +56,9 @@ struct View3DWindow {
 };
 
 struct AppContext {
-    GLFWwindow* window = nullptr;
+    std::unique_ptr<render_module::detail::IPlatformBackend> platform;
+    std::unique_ptr<render_module::detail::IInputBackend> input;
+    std::unique_ptr<render_module::detail::IPresenter> presenter;
     NVGcontext* vg = nullptr;
     std::vector<std::function<void()>> imguiCallbacks;
     std::vector<PaintWindow> paintWindows;
@@ -63,8 +66,6 @@ struct AppContext {
     double fpsSetpoint = 30.0;
     double fpsCurrent = 0.0;
     double deltaTime = 0.0;
-    bool glfwInitialized = false;
-    bool imguiGlfwInitialized = false;
     bool imguiOpenGLInitialized = false;
     bool initialized = false;
 };
@@ -446,28 +447,15 @@ bool RenderModule::Init(int width, int height, double fps, const char* title) {
     }
 
     ctx.fpsSetpoint = std::max(0.0, fps);
-    glfwSetErrorCallback([](int code, const char* message) {
-        std::fprintf(stderr, "GLFW error %d: %s\n", code, message);
-    });
-    if (!glfwInit()) return false;
-    ctx.glfwInitialized = true;
-
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-#ifdef __APPLE__
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
-#endif
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-    ctx.window = glfwCreateWindow(width, height, title, nullptr, nullptr);
-    if (!ctx.window) {
-        Shutdown();
+    // The compatibility Init overload continues to select Desktop exclusively.
+    ctx.platform = render_module::detail::CreateGlfwDesktopBackend();
+    if (!ctx.platform->Init(width, height, title)) {
+        ctx.platform.reset();
         return false;
     }
-    glfwMakeContextCurrent(ctx.window);
-    glfwSwapInterval(0);
+    ctx.platform->MakeCurrent();
 
-    if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
+    if (!gladLoadGLLoader(ctx.platform->GetProcAddressLoader())) {
         std::fprintf(stderr, "RenderModule: failed to load OpenGL functions.\n");
         Shutdown();
         return false;
@@ -491,12 +479,13 @@ bool RenderModule::Init(int width, int height, double fps, const char* title) {
     style.GrabRounding = 5.0f;
     style.ScrollbarRounding = 5.0f;
 
-    if (!ImGui_ImplGlfw_InitForOpenGL(ctx.window, true)) {
-        std::fprintf(stderr, "RenderModule: ImGui GLFW backend initialization failed.\n");
+    ctx.input = ctx.platform->CreateInputBackend();
+    ctx.presenter = ctx.platform->CreatePresenter();
+    if (!ctx.input || !ctx.presenter || !ctx.input->Init()) {
+        std::fprintf(stderr, "RenderModule: platform adapters initialization failed.\n");
         Shutdown();
         return false;
     }
-    ctx.imguiGlfwInitialized = true;
     if (!ImGui_ImplOpenGL3_Init("#version 330")) {
         std::fprintf(stderr, "RenderModule: ImGui OpenGL backend initialization failed.\n");
         Shutdown();
@@ -570,24 +559,23 @@ void RenderModule::ZoomView(std::function<void(NVGcontext*)> callback) {
 void RenderModule::Run() {
     using Clock = std::chrono::steady_clock;
 
-    if (!ctx.initialized || !ctx.window) {
+    if (!ctx.initialized || !ctx.platform || !ctx.platform->IsInitialized()) {
         std::fprintf(stderr, "RenderModule::Run called before successful Init.\n");
         return;
     }
 
-    while (!glfwWindowShouldClose(ctx.window)) {
+    ctx.platform->MakeCurrent();
+    while (!ctx.platform->ShouldClose()) {
         const auto frameStart = Clock::now();
-        glfwPollEvents();
+        ctx.platform->PollEvents();
 
-        int displayWidth = 0;
-        int displayHeight = 0;
-        glfwGetFramebufferSize(ctx.window, &displayWidth, &displayHeight);
-        glViewport(0, 0, displayWidth, displayHeight);
+        const auto display = ctx.platform->GetFramebufferSize();
+        glViewport(0, 0, display.width, display.height);
         glClearColor(0.35f, 0.36f, 0.39f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
         ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
+        ctx.input->NewFrame();
         ImGui::NewFrame();
 
         if (settings.rootWindowDockingEnabled) 
@@ -604,7 +592,7 @@ void RenderModule::Run() {
 
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-        glfwSwapBuffers(ctx.window);
+        ctx.presenter->Present();
 
         if (ctx.fpsSetpoint > 0.0)         {
             const auto framePeriod = std::chrono::duration<double>(1.0/ctx.fpsSetpoint);
@@ -620,7 +608,7 @@ void RenderModule::Run() {
 }
 
 void RenderModule::RequestClose() {
-    if (ctx.window) glfwSetWindowShouldClose(ctx.window, GLFW_TRUE);
+    if (ctx.platform) ctx.platform->RequestClose();
 }
 
 void RenderModule::IsolatedFrameBuffer(
@@ -640,6 +628,8 @@ void RenderModule::IsolatedFrameBuffer(
 }
 
 void RenderModule::Shutdown() {
+    // GL resources (including Magnum) must die before the platform context.
+    if (ctx.platform && ctx.platform->IsInitialized()) ctx.platform->MakeCurrent();
     Console().SetCoutRedirect(false);
     for (PaintWindow& window : ctx.paintWindows) DestroyFBO(window);
     ctx.paintWindows.clear();
@@ -659,19 +649,10 @@ void RenderModule::Shutdown() {
         ImGui_ImplOpenGL3_Shutdown();
         ctx.imguiOpenGLInitialized = false;
     }
-    if (ctx.imguiGlfwInitialized) {
-        ImGui_ImplGlfw_Shutdown();
-        ctx.imguiGlfwInitialized = false;
-    }
+    ctx.input.reset(); // Shuts down platform input while ImGui and the window live.
     if (ImGui::GetCurrentContext()) ImGui::DestroyContext();
-    if (ctx.window) {
-        glfwDestroyWindow(ctx.window);
-        ctx.window = nullptr;
-    }
-    if (ctx.glfwInitialized) {
-        glfwTerminate();
-        ctx.glfwInitialized = false;
-    }
+    ctx.presenter.reset();
+    ctx.platform.reset();
 
     ctx.initialized = false;
     ctx.fpsCurrent = 0.0;
@@ -679,11 +660,9 @@ void RenderModule::Shutdown() {
 }
 
 render_module::Vec2 RenderModule::GetWindowSize() {
-    if (!ctx.window) return {};
-    int width = 0;
-    int height = 0;
-    glfwGetWindowSize(ctx.window, &width, &height);
-    return {static_cast<float>(width), static_cast<float>(height)};
+    if (!ctx.platform || !ctx.platform->IsInitialized()) return {};
+    const auto size = ctx.platform->GetWindowSize();
+    return {static_cast<float>(size.width), static_cast<float>(size.height)};
 }
 
 ImVec2 RenderModule::GetGLFWWindowSize() {

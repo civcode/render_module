@@ -42,6 +42,22 @@ cmake --install build --prefix "$HOME/.local"
 
 To omit examples, configure with `-DRENDER_MODULE_BUILD_EXAMPLES=OFF`.
 
+### Desktop regression tests
+
+~~~sh
+cmake -S . -B build -DRENDER_MODULE_BUILD_TESTS=ON
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+~~~
+
+The backend and rendering tests require a desktop display and OpenGL 3.3+.
+On Linux CI, run them under `xvfb-run -a ctest --test-dir build --output-on-failure`
+(with Xvfb and Mesa installed). This tests the **Desktop** backend, not headless
+EGL support. The Linux `desktop_no_display` test explicitly unsets both display
+variables and checks clean initialization failure. Tests cover context/proc
+loading, input callbacks, resize/scale, presentation, existing 2D/3D APIs, close,
+and repeated shutdown/reinitialization. They are not pixel-golden visual tests.
+
 ## Interactive 3D views
 
 `RenderModule::Register3DView()` creates a dockable ImGui render window backed by its own color + depth/stencil framebuffer. Camera state persists from frame to frame.

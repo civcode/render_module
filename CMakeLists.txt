@@ -6,6 +6,7 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 option(RENDER_MODULE_BUILD_EXAMPLES "Build RenderModule examples" ON)
+option(RENDER_MODULE_BUILD_TESTS "Build RenderModule desktop regression tests" OFF)
 
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
@@ -161,6 +162,9 @@ target_sources(RenderModule PRIVATE
     src/nvg_wrapper.cpp
     src/pose_tool.cpp
     src/render_module.cpp
+    src/platform/glfw_desktop_backend.cpp
+    src/input/glfw_imgui_input.cpp
+    src/present/desktop_presenter.cpp
     src/view3d.cpp
     src/zoom_view.cpp
     ${imgui_SOURCE_DIR}/imgui.cpp
@@ -186,16 +190,6 @@ target_include_directories(RenderModule
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-# target_link_libraries(RenderModule PRIVATE
-#     ${RENDER_MODULE_GLFW_TARGET}
-#     glad
-#     Magnum::Magnum
-#     Magnum::GL
-#     Magnum::GLContext
-#     Magnum::MeshTools
-#     Magnum::Primitives
-#     Magnum::Shaders
-# )
 target_link_libraries(RenderModule PRIVATE
     ${RENDER_MODULE_GLFW_TARGET}
     glad
@@ -284,4 +278,22 @@ if(RENDER_MODULE_BUILD_EXAMPLES)
     render_module_example(DebugConsoleDemo examples/debug_console_demo.cpp)
     render_module_example(PathPlanningDemo examples/path_planning_demo.cpp)
     render_module_example(RenderModule3DDemo examples/view3d_demo.cpp)
+endif()
+
+if(RENDER_MODULE_BUILD_TESTS)
+    enable_testing()
+    add_executable(RenderModuleDesktopTests tests/desktop_tests.cpp)
+    target_include_directories(RenderModuleDesktopTests PRIVATE src)
+    target_link_libraries(RenderModuleDesktopTests PRIVATE
+        RenderModule::RenderModule ${RENDER_MODULE_GLFW_TARGET})
+
+    add_test(NAME desktop_backend COMMAND RenderModuleDesktopTests --backend)
+    add_test(NAME desktop_render COMMAND RenderModuleDesktopTests --render)
+    set_tests_properties(desktop_backend desktop_render PROPERTIES TIMEOUT 30)
+    if(UNIX AND NOT APPLE)
+        add_test(NAME desktop_no_display
+            COMMAND ${CMAKE_COMMAND} -E env --unset=DISPLAY --unset=WAYLAND_DISPLAY
+                $<TARGET_FILE:RenderModuleDesktopTests> --no-display)
+        set_tests_properties(desktop_no_display PROPERTIES TIMEOUT 30)
+    endif()
 endif()
