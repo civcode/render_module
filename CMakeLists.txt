@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.16) # Required by GLFW 3.5.1.
 project(RenderModule VERSION 0.3.0 LANGUAGES C CXX)
 
 include(FetchContent)
@@ -6,32 +6,54 @@ include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 option(RENDER_MODULE_BUILD_EXAMPLES "Build RenderModule examples" ON)
-option(RENDER_MODULE_BUILD_TESTS "Build RenderModule desktop regression tests" OFF)
+option(RENDER_MODULE_BUILD_TESTS "Build RenderModule regression tests" OFF)
+option(RENDER_MODULE_ENABLE_DESKTOP "Build the existing Desktop backend" ON)
+option(RENDER_MODULE_ENABLE_HEADLESS "Build Linux GLFW Null/EGL and native EGL backends" OFF)
 
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(GLFW QUIET IMPORTED_TARGET glfw3)
+if(RENDER_MODULE_ENABLE_HEADLESS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "RenderModule: headless EGL backends currently require Linux")
+endif()
+if(NOT RENDER_MODULE_ENABLE_DESKTOP AND NOT RENDER_MODULE_ENABLE_HEADLESS)
+    message(FATAL_ERROR "RenderModule: enable at least one graphics backend")
+endif()
+if(RENDER_MODULE_ENABLE_HEADLESS)
+    find_package(OpenGL REQUIRED COMPONENTS OpenGL EGL)
 endif()
 
-if(TARGET PkgConfig::GLFW)
-    set(RENDER_MODULE_GLFW_TARGET PkgConfig::GLFW)
-else()
-    # Keep the project buildable on machines that don't provide a system GLFW
-    # development package (the original project required pkg-config glfw3).
-    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-    set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(
-        glfw
-        GIT_REPOSITORY https://github.com/glfw/glfw.git
-        GIT_TAG 3.4
-        GIT_SHALLOW TRUE
-    )
-    FetchContent_MakeAvailable(glfw)
-    set_target_properties(glfw PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    set(RENDER_MODULE_GLFW_TARGET glfw)
+# GLFW 3.5.1 added Mesa surfaceless EGL to the Null platform. Always use this
+# pinned version rather than silently accepting an older system GLFW.
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+set(GLFW_LIBRARY_TYPE STATIC CACHE STRING "" FORCE)
+if(NOT RENDER_MODULE_ENABLE_DESKTOP)
+    set(GLFW_BUILD_X11 OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
 endif()
+FetchContent_Declare(
+    glfw
+    GIT_REPOSITORY https://github.com/glfw/glfw.git
+    GIT_TAG 3.5.1 # d9d6f0f1f967807ffade6598ea9a631ebaf37a56
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(glfw)
+if(RENDER_MODULE_ENABLE_DESKTOP AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
+   AND NOT GLFW_BUILD_X11 AND NOT GLFW_BUILD_WAYLAND)
+    message(FATAL_ERROR "Desktop needs a GLFW window-system backend. Enable GLFW_BUILD_X11 or GLFW_BUILD_WAYLAND, or use a fresh build directory.")
+endif()
+foreach(part MAJOR MINOR REVISION)
+    file(STRINGS "${glfw_SOURCE_DIR}/include/GLFW/glfw3.h" _version_line
+        REGEX "^#define GLFW_VERSION_${part} +[0-9]+")
+    string(REGEX MATCH "[0-9]+$" _glfw_${part} "${_version_line}")
+endforeach()
+set(RENDER_MODULE_GLFW_VERSION "${_glfw_MAJOR}.${_glfw_MINOR}.${_glfw_REVISION}")
+if(RENDER_MODULE_GLFW_VERSION VERSION_LESS "3.5.1")
+    message(FATAL_ERROR "RenderModule requires GLFW 3.5.1+, found ${RENDER_MODULE_GLFW_VERSION}")
+endif()
+message(STATUS "RenderModule GLFW: ${RENDER_MODULE_GLFW_VERSION}")
+set_target_properties(glfw PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set(RENDER_MODULE_GLFW_TARGET glfw)
 
 if(APPLE)
     set(MAGNUM_WITH_CGLCONTEXT ON CACHE BOOL "" FORCE)
@@ -40,7 +62,8 @@ elseif(WIN32)
     set(MAGNUM_WITH_WGLCONTEXT ON CACHE BOOL "" FORCE)
     set(RENDER_MODULE_MAGNUM_CONTEXT_TARGET Magnum::WglContext)
 elseif(UNIX)
-    set(MAGNUM_WITH_GLXCONTEXT ON CACHE BOOL "" FORCE)
+    set(MAGNUM_WITH_GLXCONTEXT ${RENDER_MODULE_ENABLE_DESKTOP} CACHE BOOL "" FORCE)
+    set(MAGNUM_WITH_EGLCONTEXT ${RENDER_MODULE_ENABLE_HEADLESS} CACHE BOOL "" FORCE)
     set(RENDER_MODULE_MAGNUM_CONTEXT_TARGET Magnum::GlxContext)
 else()
     message(FATAL_ERROR
@@ -55,8 +78,7 @@ set(CORRADE_BUILD_STATIC_PIC ON CACHE BOOL "" FORCE)
 FetchContent_Declare(
     Corrade
     GIT_REPOSITORY https://github.com/mosra/corrade.git
-    GIT_TAG master
-    GIT_SHALLOW TRUE
+    GIT_TAG c028fd6e261a0665f72fbc75c7c034baf47747c6
 )
 
 set(MAGNUM_BUILD_STATIC ON CACHE BOOL "" FORCE)
@@ -76,24 +98,16 @@ set(MAGNUM_WITH_TEXT OFF CACHE BOOL "" FORCE)
 set(MAGNUM_WITH_TEXTURETOOLS OFF CACHE BOOL "" FORCE)
 set(MAGNUM_WITH_VK OFF CACHE BOOL "" FORCE)
 
-if(APPLE)
-    set(MAGNUM_WITH_CGLCONTEXT ON CACHE BOOL "" FORCE)
-elseif(WIN32)
-    set(MAGNUM_WITH_WGLCONTEXT ON CACHE BOOL "" FORCE)
-elseif(UNIX)
-    set(MAGNUM_WITH_GLXCONTEXT ON CACHE BOOL "" FORCE)
-else()
-    message(FATAL_ERROR "RenderModule: no Magnum GL context handler configured for this platform")
-endif()
-
 FetchContent_Declare(
     Magnum
     GIT_REPOSITORY https://github.com/mosra/magnum.git
-    GIT_TAG master
-    GIT_SHALLOW TRUE
+    GIT_TAG f239823e9afd27ab0ecf28e1d567831e3c62a25e
 )
 FetchContent_MakeAvailable(Corrade)
 FetchContent_MakeAvailable(Magnum)
+if(RENDER_MODULE_ENABLE_HEADLESS)
+    include(cmake/RuntimeMagnumContext.cmake)
+endif()
 
 FetchContent_Declare(
     glad
@@ -162,21 +176,35 @@ target_sources(RenderModule PRIVATE
     src/nvg_wrapper.cpp
     src/pose_tool.cpp
     src/render_module.cpp
-    src/platform/glfw_desktop_backend.cpp
-    src/input/glfw_imgui_input.cpp
-    src/present/desktop_presenter.cpp
+    src/platform/platform_backend.cpp
     src/view3d.cpp
     src/zoom_view.cpp
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
     ${implot_SOURCE_DIR}/implot.cpp
     ${implot_SOURCE_DIR}/implot_items.cpp
     ${nanovg_SOURCE_DIR}/src/nanovg.c
 )
+
+if(RENDER_MODULE_ENABLE_DESKTOP)
+    target_sources(RenderModule PRIVATE
+        src/platform/glfw_desktop_backend.cpp
+        src/input/glfw_imgui_input.cpp
+        src/present/desktop_presenter.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp)
+    target_compile_definitions(RenderModule PRIVATE RENDER_MODULE_ENABLE_DESKTOP)
+endif()
+if(RENDER_MODULE_ENABLE_HEADLESS)
+    target_sources(RenderModule PRIVATE
+        src/platform/glfw_null_egl_backend.cpp
+        src/platform/native_egl_backend.cpp
+        src/platform/headless_adapters.cpp)
+    target_compile_definitions(RenderModule PRIVATE RENDER_MODULE_ENABLE_HEADLESS)
+    target_link_libraries(RenderModule PRIVATE OpenGL::EGL ${CMAKE_DL_LIBS})
+endif()
 
 target_compile_features(RenderModule PUBLIC cxx_std_17)
 target_include_directories(RenderModule
@@ -282,18 +310,43 @@ endif()
 
 if(RENDER_MODULE_BUILD_TESTS)
     enable_testing()
-    add_executable(RenderModuleDesktopTests tests/desktop_tests.cpp)
-    target_include_directories(RenderModuleDesktopTests PRIVATE src)
-    target_link_libraries(RenderModuleDesktopTests PRIVATE
-        RenderModule::RenderModule ${RENDER_MODULE_GLFW_TARGET})
+    if(RENDER_MODULE_ENABLE_DESKTOP)
+        add_executable(RenderModuleDesktopTests tests/desktop_tests.cpp)
+        target_include_directories(RenderModuleDesktopTests PRIVATE src)
+        target_link_libraries(RenderModuleDesktopTests PRIVATE
+            RenderModule::RenderModule ${RENDER_MODULE_GLFW_TARGET})
+        if(RENDER_MODULE_ENABLE_HEADLESS)
+            target_compile_definitions(RenderModuleDesktopTests PRIVATE RENDER_MODULE_TEST_HEADLESS)
+        endif()
 
-    add_test(NAME desktop_backend COMMAND RenderModuleDesktopTests --backend)
-    add_test(NAME desktop_render COMMAND RenderModuleDesktopTests --render)
-    set_tests_properties(desktop_backend desktop_render PROPERTIES TIMEOUT 30)
-    if(UNIX AND NOT APPLE)
-        add_test(NAME desktop_no_display
-            COMMAND ${CMAKE_COMMAND} -E env --unset=DISPLAY --unset=WAYLAND_DISPLAY
-                $<TARGET_FILE:RenderModuleDesktopTests> --no-display)
-        set_tests_properties(desktop_no_display PROPERTIES TIMEOUT 30)
+        add_test(NAME desktop_backend COMMAND RenderModuleDesktopTests --backend)
+        add_test(NAME desktop_render COMMAND RenderModuleDesktopTests --render)
+        set_tests_properties(desktop_backend desktop_render PROPERTIES TIMEOUT 30)
+        if(UNIX AND NOT APPLE)
+            add_test(NAME desktop_no_display
+                COMMAND ${CMAKE_COMMAND} -E env --unset=DISPLAY --unset=WAYLAND_DISPLAY
+                    $<TARGET_FILE:RenderModuleDesktopTests> --no-display)
+            set_tests_properties(desktop_no_display PROPERTIES TIMEOUT 30)
+        endif()
+    endif()
+    if(RENDER_MODULE_ENABLE_HEADLESS)
+        add_executable(RenderModuleHeadlessTests tests/headless_tests.cpp)
+        target_include_directories(RenderModuleHeadlessTests PRIVATE src)
+        target_link_libraries(RenderModuleHeadlessTests PRIVATE RenderModule::RenderModule OpenGL::EGL)
+        foreach(provider glfw native pbuffer)
+            add_test(NAME headless_${provider}
+                COMMAND ${CMAKE_COMMAND} -E env --unset=DISPLAY --unset=WAYLAND_DISPLAY
+                    $<TARGET_FILE:RenderModuleHeadlessTests> ${provider})
+            set_tests_properties(headless_${provider} PROPERTIES TIMEOUT 60 LABELS headless)
+        endforeach()
+        if(RENDER_MODULE_BUILD_EXAMPLES)
+            foreach(context glfw-null-egl native-egl)
+                add_test(NAME headless_demo_${context}
+                    COMMAND ${CMAKE_COMMAND} -E env --unset=DISPLAY --unset=WAYLAND_DISPLAY
+                        $<TARGET_FILE:RenderModule3DDemo> --render-backend headless
+                        --headless-context ${context} --frames 3)
+                set_tests_properties(headless_demo_${context} PROPERTIES TIMEOUT 60 LABELS headless)
+            endforeach()
+        endif()
     endif()
 endif()

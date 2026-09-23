@@ -57,9 +57,9 @@ void CheckBackend() {
     CHECK(platform->GetFramebufferSize().height == 0);
     platform->RequestClose();
     platform->Shutdown();
-    CHECK(!platform->Init(0, 240, "Invalid"));
+    CHECK(!platform->Initialize(0, 240, "Invalid"));
 
-    CHECK(platform->Init(320, 240, "Desktop backend regression"));
+    CHECK(platform->Initialize(320, 240, "Desktop backend regression"));
     CHECK(platform->IsInitialized());
     CHECK(!platform->ShouldClose());
     GLFWwindow* window = glfwGetCurrentContext();
@@ -149,7 +149,7 @@ void CheckBackend() {
     platform->Shutdown();
     CHECK(!platform->IsInitialized());
     CHECK(glfwGetCurrentContext() == nullptr);
-    CHECK(platform->Init(320, 240, "Desktop reinitialization"));
+    CHECK(platform->Initialize(320, 240, "Desktop reinitialization"));
     CHECK(!platform->ShouldClose());
 }
 
@@ -221,6 +221,22 @@ void CheckRender() {
         CheckStopped();
         CHECK(glfwGetCurrentContext() == nullptr);
         RenderModule::Shutdown();
+#ifdef RENDER_MODULE_TEST_HEADLESS
+        // Native initialization hints and GL function tables must not leak from
+        // headless contexts into the next Desktop/GLX rendering cycle.
+        for (auto provider : {render_module::HeadlessContext::GlfwNullEgl,
+                              render_module::HeadlessContext::NativeEgl}) {
+            render_module::Config config;
+            config.backend = render_module::Backend::Headless;
+            config.headlessContext = provider;
+            CHECK(RenderModule::Init(config));
+            CHECK(glGetError() == GL_NO_ERROR);
+            RenderModule::RequestClose();
+            RenderModule::Run();
+            RenderModule::Shutdown();
+            CheckStopped();
+        }
+#endif
     }
 }
 

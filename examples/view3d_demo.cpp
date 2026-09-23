@@ -1,7 +1,10 @@
 #include "render_module/render_module.hpp"
 
+#include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <string_view>
 #include <vector>
 
 #include <imgui_internal.h>
@@ -10,15 +13,49 @@ namespace {
 constexpr float kPi = 3.14159265358979323846f;
 }
 
-int main() {
-    if (!RenderModule::Init(1200, 800, 60.0, "RenderModule 3D Demo")) return 1;
+int main(int argc, char** argv) {
+    render_module::Config config;
+    config.width = 1200;
+    config.height = 800;
+    config.fps = 60.0;
+    config.title = "RenderModule 3D Demo";
+    int frameLimit = 0;
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view option = argv[i];
+        const std::string_view value = i + 1 < argc ? argv[++i] : "";
+        if (option == "--render-backend" && value == "desktop")
+            config.backend = render_module::Backend::Desktop;
+        else if (option == "--render-backend" && value == "headless")
+            config.backend = render_module::Backend::Headless;
+        else if (option == "--headless-context" && value == "glfw-null-egl")
+            config.headlessContext = render_module::HeadlessContext::GlfwNullEgl;
+        else if (option == "--headless-context" && value == "native-egl")
+            config.headlessContext = render_module::HeadlessContext::NativeEgl;
+        else if (option == "--frames" && !value.empty()) {
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), frameLimit);
+            if (parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() && frameLimit > 0)
+                continue;
+            std::fprintf(stderr, "--frames requires a positive integer.\n");
+            return 1;
+        } else {
+            std::fprintf(stderr, "Usage: %s [--render-backend desktop|headless] "
+                "[--headless-context glfw-null-egl|native-egl] [--frames N]\n", argv[0]);
+            return 1;
+        }
+    }
+    if (!RenderModule::Init(config)) return 1;
+    if (config.backend == render_module::Backend::Headless)
+        ImGui::GetIO().IniFilename = nullptr; // Deterministic offscreen demo layout.
     RenderModule::EnableRootWindowDocking();
+    int frames = 0;
+    int renderedViews = 0;
 
     bool resetCameraRequested = false;
     bool topCameraRequested = false;
     render_module::Pose3D cameraPose{};
 
     RenderModule::RegisterImGuiCallback([&] {
+        if (frameLimit > 0 && ++frames == frameLimit) RenderModule::RequestClose();
 
         static bool initialized = false;
         const ImGuiID dockspaceId = RenderModule::GetRootDockspaceID();
@@ -56,6 +93,7 @@ int main() {
 
     RenderModule::Register3DView("Localization 3D", [&](render_module::View3D& view) {
         using namespace render_module;
+        ++renderedViews;
 
         if (resetCameraRequested) {
             view.Camera().Reset();
@@ -141,5 +179,11 @@ int main() {
 
     RenderModule::Run();
     RenderModule::Shutdown();
+    if (frameLimit > 0 && renderedViews == 0) {
+        std::fprintf(stderr, "3D demo did not render its scene.\n");
+        return 1;
+    }
+    if (config.backend == render_module::Backend::Headless)
+        std::fprintf(stderr, "Headless 3D demo rendered %d scene frames (no final UI output).\n", renderedViews);
     return 0;
 }

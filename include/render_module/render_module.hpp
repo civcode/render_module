@@ -9,6 +9,7 @@
 #include <implot.h>
 #include "nanovg.h"
 
+#include "render_module/config.hpp"
 #include "render_module/canvas.hpp"
 #include "render_module/view3d.hpp"
 #include "render_module/nvg_wrapper.hpp"
@@ -27,6 +28,8 @@ public:
 
     // Returns false and prints a diagnostic when initialization fails.
     static bool Init(int width, int height, double fps = 30.0, const char* title = "RenderModule");
+    // Headless currently renders Canvas/View3D targets only, not the final UI.
+    static bool Init(const render_module::Config& config);
     static void EnableRootWindowDocking();
     static void RegisterImGuiCallback(std::function<void()> callback);
     static void RegisterCanvas(const std::string& name,

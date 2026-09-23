@@ -9,6 +9,7 @@ namespace {
 class DesktopPresenter final : public IPresenter {
 public:
     explicit DesktopPresenter(GLFWwindow* window) : window_(window) {}
+    bool UsesDefaultFramebuffer() const override { return true; }
     void Present() override { glfwSwapBuffers(window_); }
 
 private:

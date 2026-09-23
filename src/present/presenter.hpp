@@ -5,8 +5,9 @@ namespace render_module::detail {
 class IPresenter {
 public:
     virtual ~IPresenter() = default;
-    // Phase 1 presents the already-rendered default framebuffer, on the render thread.
-    virtual void Present() = 0;
+    // Headless Phase 2 has no final composition target, even if EGL uses a pbuffer.
+    virtual bool UsesDefaultFramebuffer() const = 0;
+    virtual void Present() = 0; // Render thread only.
 };
 
 } // namespace render_module::detail

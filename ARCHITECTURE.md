@@ -15,7 +15,7 @@ component that creates the canvas hit target. Lower layers never query window
 coordinates on their own. This removes the former implicit dependency between
 render_module.cpp and zoom_view.cpp.
 
-## Desktop backend (Phase 1)
+## Platform backends (Phases 1–2)
 
 - `src/platform/platform_backend.hpp` defines `IGraphicsContext` and
   `IPlatformBackend`: current-context/proc loading, lifetime, events, close state,
@@ -33,8 +33,53 @@ and `Shutdown()` make the owned GL context current; NanoVG, ImGui, and Magnum GP
 resources are released before context destruction. Call these APIs on the same
 main/render thread. Existing Magnum external-state boundaries are unchanged.
 
-Headless/EGL, backend configuration, remote input, and streaming are deferred;
-these private interfaces do not advertise support for them yet.
+### Linux headless EGL
+
+The additive `Init(Config)` overload selects `GlfwNullEgl` or `NativeEgl`
+explicitly; neither falls back to Desktop or another provider. `Initialize()`,
+`MakeCurrent()`, `GetProcAddress()`, diagnostics, and `Shutdown()` remain private
+platform responsibilities. Public headers contain no GLFW/EGL/Magnum types.
+
+- `GlfwNullEglBackend` uses GLFW 3.5.1's Null platform and EGL context API.
+  GLFW uses a Mesa surfaceless **display platform** with a pbuffer surface.
+- `NativeEglBackend` prefers `EGL_EXT_platform_device` and an enumerated device
+  (first device by default, or a strict explicit index). Only when device
+  enumeration is unavailable/empty may it use Mesa's surfaceless display
+  platform. It never calls `eglGetDisplay(EGL_DEFAULT_DISPLAY)`.
+- Native EGL requests desktop OpenGL 3.3 Core and prefers a surfaceless context.
+  If unsupported or creation/binding fails, it logs the reason and tries a 1×1
+  pbuffer on the same device. Pbuffer use may also be explicitly requested.
+  Failed device selection/initialization never silently selects another GPU.
+- Headless frame metrics supply only size, scale, and monotonic delta time to
+  ImGui; they are **not** a remote input backend. There are no input events,
+  clipboard/cursor hooks, or remote queues.
+- Existing Canvas and View3D FBOs render normally. The headless presenter flushes
+  their GPU work but has no final output target. The core skips framebuffer-0
+  clearing and final ImGui rendering, even on the pbuffer path. **There is no root
+  UI FBO, screenshot API, final headless composition, or Phase 3 implementation.**
+
+### Magnum loader
+
+Magnum's stock `GlxContext` and `EglContext` libraries define the same loader
+symbols; linking both does not provide runtime dispatch. Headless-enabled builds
+instead use `RenderModuleMagnumContext`: the pinned upstream function table
+initializer plus a single provider-driven resolver. GLAD and Magnum both resolve
+through the context most recently made current on the render thread. This lets
+one process switch Desktop → EGL → Desktop after orderly shutdown.
+
+`cmake/RuntimeMagnumContext.cmake` generates a build-tree copy of the upstream
+initializer, expanding its NVIDIA EGL GL-1.0/1.1 reload block to every provider.
+That avoids stale core pointers across context changes and avoids EGL queries on
+GLX. The exact source guard is checked at configure time; upstream source is not
+modified. Corrade/Magnum are pinned to the inspected commits because this adapter
+uses Magnum's internal loader interface. Desktop-only builds retain the stock
+GLX/CGL/WGL loader. View3D's Magnum `EnterExternal`/`ExitExternal` boundaries and
+rendering implementation are unchanged.
+
+References: [GLFW 3.5 release notes](https://www.glfw.org/docs/latest/news.html),
+[Magnum platform support](https://magnum.graphics/doc/magnum/platform.html),
+[EGL surfaceless contexts](https://registry.khronos.org/EGL/extensions/KHR/EGL_KHR_surfaceless_context.txt),
+[optional DRM render-node metadata](https://registry.khronos.org/EGL/extensions/EXT/EGL_EXT_device_drm_render_node.txt).
 
 ## Frame flow
 

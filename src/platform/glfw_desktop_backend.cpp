@@ -14,15 +14,18 @@ class GlfwDesktopBackend final : public IPlatformBackend {
 public:
     ~GlfwDesktopBackend() override { Shutdown(); }
 
-    bool Init(int width, int height, const char* title) override {
+    bool Initialize(int width, int height, const char* title) override {
         if (IsInitialized()) return true;
         if (width <= 0 || height <= 0) return false;
         glfwSetErrorCallback([](int code, const char* message) {
             std::fprintf(stderr, "GLFW error %d: %s\n", code, message);
         });
+        // Initialization hints survive glfwTerminate(); never inherit Null mode.
+        glfwInitHint(GLFW_PLATFORM, GLFW_ANY_PLATFORM);
         if (!glfwInit()) return false;
         glfwInitialized_ = true;
 
+        glfwDefaultWindowHints();
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
@@ -35,22 +38,43 @@ public:
             Shutdown();
             return false;
         }
-        MakeCurrent();
+        if (!MakeCurrent()) {
+            Shutdown();
+            return false;
+        }
         glfwSwapInterval(0);
         return true;
     }
 
     bool IsInitialized() const override { return window_ != nullptr; }
 
-    void MakeCurrent() override {
-        if (window_) glfwMakeContextCurrent(window_);
+    bool MakeCurrent() override {
+        if (!window_) return false;
+        glfwGetError(nullptr); // Prior errors have already been logged by the callback.
+        glfwMakeContextCurrent(window_);
+        if (glfwGetError(nullptr) != GLFW_NO_ERROR || glfwGetCurrentContext() != window_)
+            return false;
+        MarkCurrent();
+        return true;
     }
 
-    ProcAddressLoader GetProcAddressLoader() const override {
-        return &LoadProcAddress;
+    void* GetProcAddress(const char* name) const override {
+        return reinterpret_cast<void*>(glfwGetProcAddress(name));
+    }
+
+    GraphicsDiagnostics Diagnostics() const override {
+        const char* provider = "GLFW Desktop (native context)";
+        switch (glfwGetPlatform()) {
+            case GLFW_PLATFORM_X11: provider = "GLFW Desktop / GLX"; break;
+            case GLFW_PLATFORM_WAYLAND: provider = "GLFW Desktop / Wayland EGL"; break;
+            case GLFW_PLATFORM_WIN32: provider = "GLFW Desktop / WGL"; break;
+            case GLFW_PLATFORM_COCOA: provider = "GLFW Desktop / CGL"; break;
+        }
+        return {provider, "desktop default", {}, {}};
     }
 
     void Shutdown() override {
+        ClearCurrent();
         if (window_) {
             glfwDestroyWindow(window_);
             window_ = nullptr;
@@ -86,12 +110,6 @@ public:
     }
 
 private:
-    // Lookup uses the current context. Keep GLFW's function-pointer conversion
-    // confined here rather than coupling GLAD or the render loop to GLFW.
-    static void* LoadProcAddress(const char* name) {
-        return reinterpret_cast<void*>(glfwGetProcAddress(name));
-    }
-
     GLFWwindow* window_ = nullptr;
     bool glfwInitialized_ = false;
 };

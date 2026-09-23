@@ -440,20 +440,29 @@ void RenderPaintWindow(PaintWindow& window) {
 } // namespace
 
 bool RenderModule::Init(int width, int height, double fps, const char* title) {
+    render_module::Config config;
+    config.width = width;
+    config.height = height;
+    config.fps = fps;
+    config.title = title ? title : "RenderModule";
+    return Init(config); // Compatibility overload always selects Desktop.
+}
+
+bool RenderModule::Init(const render_module::Config& config) {
     if (ctx.initialized) return true;
-    if (width <= 0 || height <= 0) {
+    if (config.width <= 0 || config.height <= 0) {
         std::fprintf(stderr, "RenderModule: window dimensions must be positive.\n");
         return false;
     }
 
-    ctx.fpsSetpoint = std::max(0.0, fps);
-    // The compatibility Init overload continues to select Desktop exclusively.
-    ctx.platform = render_module::detail::CreateGlfwDesktopBackend();
-    if (!ctx.platform->Init(width, height, title)) {
+    ctx.fpsSetpoint = std::max(0.0, config.fps);
+    ctx.platform = render_module::detail::CreatePlatformBackend(config);
+    if (!ctx.platform) return false;
+    if (!ctx.platform->Initialize(config.width, config.height, config.title.c_str()) ||
+        !ctx.platform->MakeCurrent()) {
         ctx.platform.reset();
         return false;
     }
-    ctx.platform->MakeCurrent();
 
     if (!gladLoadGLLoader(ctx.platform->GetProcAddressLoader())) {
         std::fprintf(stderr, "RenderModule: failed to load OpenGL functions.\n");
@@ -461,7 +470,8 @@ bool RenderModule::Init(int width, int height, double fps, const char* title) {
         return false;
     }
 
-    if (!render_module::detail::Initialize3DBackend()) {
+    if (!render_module::detail::PrintGraphicsDiagnostics(*ctx.platform) ||
+        !render_module::detail::Initialize3DBackend()) {
         Shutdown();
         return false;
     }
@@ -564,15 +574,20 @@ void RenderModule::Run() {
         return;
     }
 
-    ctx.platform->MakeCurrent();
+    if (!ctx.platform->MakeCurrent()) {
+        std::fprintf(stderr, "RenderModule::Run: could not make the graphics context current.\n");
+        return;
+    }
     while (!ctx.platform->ShouldClose()) {
         const auto frameStart = Clock::now();
         ctx.platform->PollEvents();
 
         const auto display = ctx.platform->GetFramebufferSize();
         glViewport(0, 0, display.width, display.height);
-        glClearColor(0.35f, 0.36f, 0.39f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
+        if (ctx.presenter->UsesDefaultFramebuffer()) {
+            glClearColor(0.35f, 0.36f, 0.39f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+        }
 
         ImGui_ImplOpenGL3_NewFrame();
         ctx.input->NewFrame();
@@ -591,7 +606,11 @@ void RenderModule::Run() {
             Render3DWindow(window);
 
         ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        // Phase 2 renders existing per-window targets only in headless mode.
+        // Never draw to framebuffer 0 on a surfaceless context. Root UI output
+        // and final headless composition belong to Phase 3, not this backend.
+        if (ctx.presenter->UsesDefaultFramebuffer())
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         ctx.presenter->Present();
 
         if (ctx.fpsSetpoint > 0.0)         {
@@ -629,7 +648,11 @@ void RenderModule::IsolatedFrameBuffer(
 
 void RenderModule::Shutdown() {
     // GL resources (including Magnum) must die before the platform context.
-    if (ctx.platform && ctx.platform->IsInitialized()) ctx.platform->MakeCurrent();
+    if (ctx.platform && ctx.platform->IsInitialized() && !ctx.platform->MakeCurrent()) {
+        std::fprintf(stderr, "RenderModule::Shutdown: could not make context current; "
+            "GPU resources retained to avoid destroying them against another context.\n");
+        return;
+    }
     Console().SetCoutRedirect(false);
     for (PaintWindow& window : ctx.paintWindows) DestroyFBO(window);
     ctx.paintWindows.clear();
