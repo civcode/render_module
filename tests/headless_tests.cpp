@@ -5,6 +5,8 @@
 #include "platform/platform_backend.hpp"
 #include "input/input_backend.hpp"
 #include "present/presenter.hpp"
+#include "core/root_framebuffer.hpp"
+#include "core/render_output.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -69,8 +71,15 @@ void CheckProvider(const render_module::Config& config) {
     CHECK(platform->GetWindowSize().width == 320);
     CHECK(platform->GetFramebufferSize().height == 240);
     auto presenter = platform->CreatePresenter();
-    CHECK(presenter && !presenter->UsesDefaultFramebuffer());
-    presenter->Present();
+    CHECK(presenter);
+    render_module::detail::RootFramebuffer root;
+    CHECK(root.Resize(32, 24));
+    root.BeginFrame();
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    const auto now = std::chrono::steady_clock::now();
+    CHECK(presenter->Present(root.Complete(1, now, now)));
+    root.Destroy();
     CHECK(glGetError() == GL_NO_ERROR);
     presenter.reset();
     platform->PollEvents();
@@ -137,7 +146,10 @@ void CheckRendering(render_module::Config config) {
         CHECK(glGetError() == GL_NO_ERROR);
         GLint bound = -1;
         glGetIntegerv(GL_FRAMEBUFFER_BINDING, &bound);
-        CHECK(bound == 0); // No root UI framebuffer was introduced.
+        const auto frame = render_module::detail::CompletedFrame();
+        CHECK(frame.IsValid() && bound == static_cast<GLint>(frame.Framebuffer()));
+        CHECK(frame.width == 640 && frame.height == 480 && frame.frameId == 3);
+        CHECK(frame.renderCompleted >= frame.renderStarted);
         canvasTarget.CheckPixel(false);
         viewTarget.CheckPixel(true);
         RenderModule::Run();

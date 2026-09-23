@@ -6,6 +6,11 @@
 #include "platform/platform_backend.hpp"
 #include "input/input_backend.hpp"
 #include "present/presenter.hpp"
+#include "present/desktop_presenter.hpp"
+#include "core/root_framebuffer.hpp"
+#include "core/render_output.hpp"
+#include "present/image_presenter.hpp"
+#include <backends/imgui_impl_opengl3.h>
 
 #include <chrono>
 #include <cmath>
@@ -131,10 +136,61 @@ void CheckBackend() {
     CHECK(!ImGui::IsMouseDown(ImGuiMouseButton_Left));
     ImGui::EndFrame();
 
+    render_module::detail::RootFramebuffer root;
+    CHECK(root.Resize(framebuffer.width, framebuffer.height));
+    root.BeginFrame();
     glViewport(0, 0, framebuffer.width, framebuffer.height);
     glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
-    presenter->Present();
+    const auto now = std::chrono::steady_clock::now();
+    const auto frame = root.Complete(1, now, now);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(0, 0, 0, 0);
+    glEnable(GL_FRAMEBUFFER_SRGB);
+    CHECK(render_module::detail::BlitToDefaultFramebuffer(frame, framebuffer.width, framebuffer.height));
+    CHECK(glIsEnabled(GL_SCISSOR_TEST) && glIsEnabled(GL_FRAMEBUFFER_SRGB));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glReadBuffer(GL_BACK);
+    unsigned char pixel[4] = {};
+    glReadPixels(framebuffer.width/2, framebuffer.height/2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    CHECK(std::abs(int(pixel[0]) - 64) <= 1 && std::abs(int(pixel[1]) - 128) <= 1 &&
+          std::abs(int(pixel[2]) - 191) <= 1);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, root.Framebuffer());
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_FRAMEBUFFER_SRGB);
+    CHECK(presenter->Present(frame));
+    root.BeginFrame();
+    glClearColor(1, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(0, 0, framebuffer.width, framebuffer.height/2);
+    glClearColor(0, 0, 1, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
+    const auto oriented = root.Complete(2, now, std::chrono::steady_clock::now());
+    CHECK(render_module::detail::BlitToDefaultFramebuffer(oriented, framebuffer.width, framebuffer.height));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glReadBuffer(GL_BACK);
+    glReadPixels(framebuffer.width/2, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    CHECK(pixel[0] == 0 && pixel[2] == 255); // Bottom stays bottom on Desktop.
+    glReadPixels(framebuffer.width/2, framebuffer.height-3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    CHECK(pixel[0] == 255 && pixel[2] == 0);
+    CHECK(root.Resize(framebuffer.width, framebuffer.height/2));
+    root.BeginFrame();
+    glClearColor(0, 1, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    const auto scaled = root.Complete(3, now, std::chrono::steady_clock::now());
+    CHECK(render_module::detail::BlitToDefaultFramebuffer(scaled, framebuffer.width, framebuffer.height));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glReadBuffer(GL_BACK);
+    glReadPixels(framebuffer.width/2, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    CHECK(pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 0); // Black bar, not stretching.
+    glReadPixels(framebuffer.width/2, framebuffer.height/2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    CHECK(pixel[1] == 255);
+    CHECK(render_module::detail::BlitToDefaultFramebuffer(scaled, 0, 0)); // Minimized.
+    CHECK(presenter->Present(scaled));
+    root.Destroy();
+    CHECK(!presenter->Present(frame));
     CHECK(glGetError() == GL_NO_ERROR);
     platform->RequestClose();
     CHECK(platform->ShouldClose());
@@ -213,6 +269,29 @@ void CheckRender() {
         CHECK(frames == 3);
         CHECK(canvases > 0 && legacyCanvases > 0 && offscreens == 3 && views > 0);
         CHECK(RenderModule::GetFPS() > 0 && RenderModule::GetDeltaTime() > 0);
+        CHECK(glGetError() == GL_NO_ERROR);
+        const auto frame = render_module::detail::CompletedFrame();
+        CHECK(frame.IsValid() && frame.frameId == 3);
+        CHECK(frame.width == ImGui::GetIO().DisplaySize.x * ImGui::GetIO().DisplayFramebufferScale.x);
+        // Visual parity oracle: replay the completed draw list through the OLD
+        // direct-to-default path in the test, never in either presenter.
+        render_module::detail::ImageRgba rootImage;
+        CHECK(render_module::detail::ImagePresenter::Read(frame, rootImage));
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDrawBuffer(GL_BACK);
+        glClearColor(0.35f, 0.36f, 0.39f, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        std::vector<unsigned char> direct(rootImage.pixels.size());
+        glReadBuffer(GL_BACK);
+        glReadPixels(0, 0, frame.width, frame.height, GL_RGBA, GL_UNSIGNED_BYTE, direct.data());
+        for (int y = 0; y < frame.height; ++y) for (int x = 0; x < frame.width; ++x)
+            for (int c = 0; c < 3; ++c) {
+                const auto rootIndex = (std::size_t(y)*frame.width + x)*4 + c;
+                const auto directIndex = (std::size_t(frame.height-1-y)*frame.width + x)*4 + c;
+                CHECK(std::abs(int(rootImage.pixels[rootIndex]) - direct[directIndex]) <= 1);
+            }
+        glBindFramebuffer(GL_FRAMEBUFFER, frame.Framebuffer());
         CHECK(glGetError() == GL_NO_ERROR);
         RenderModule::Run(); // A closed platform must not start another frame.
         CHECK(frames == 3);

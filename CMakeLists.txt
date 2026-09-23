@@ -137,7 +137,7 @@ FetchContent_MakeAvailable(implot)
 FetchContent_Declare(
     nanovg
     GIT_REPOSITORY https://github.com/memononen/nanovg.git
-    GIT_TAG master 
+    GIT_TAG ce3bf745eb2d2dbc14a50bf2446783f691ac4353 # Includes public-domain PNG writer.
 )
 FetchContent_MakeAvailable(nanovg)
 
@@ -176,6 +176,8 @@ target_sources(RenderModule PRIVATE
     src/nvg_wrapper.cpp
     src/pose_tool.cpp
     src/render_module.cpp
+    src/core/root_framebuffer.cpp
+    src/present/image_presenter.cpp
     src/platform/platform_backend.cpp
     src/view3d.cpp
     src/zoom_view.cpp
@@ -217,6 +219,7 @@ target_include_directories(RenderModule
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${nanovg_SOURCE_DIR}/example # stb_image_write.h, private diagnostic PNG writer.
 )
 target_link_libraries(RenderModule PRIVATE
     ${RENDER_MODULE_GLFW_TARGET}
@@ -246,6 +249,7 @@ install(
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES third_party/PNG_NOTICE.md DESTINATION ${CMAKE_INSTALL_DATADIR}/render-module/licenses)
 
 install(
     FILES ${glad_BINARY_DIR}/include/glad/glad.h
@@ -310,6 +314,12 @@ endif()
 
 if(RENDER_MODULE_BUILD_TESTS)
     enable_testing()
+    add_executable(RenderModuleOutputTests tests/output_tests.cpp)
+    target_include_directories(RenderModuleOutputTests PRIVATE src)
+    target_link_libraries(RenderModuleOutputTests PRIVATE RenderModule::RenderModule)
+    target_compile_definitions(RenderModuleOutputTests PRIVATE
+        RENDER_MODULE_GOLDEN_PATH="${CMAKE_CURRENT_SOURCE_DIR}/tests/golden/root-ui.png"
+        RENDER_MODULE_ARTIFACT_DIR="${CMAKE_CURRENT_BINARY_DIR}/test-artifacts")
     if(RENDER_MODULE_ENABLE_DESKTOP)
         add_executable(RenderModuleDesktopTests tests/desktop_tests.cpp)
         target_include_directories(RenderModuleDesktopTests PRIVATE src)
@@ -319,6 +329,8 @@ if(RENDER_MODULE_BUILD_TESTS)
             target_compile_definitions(RenderModuleDesktopTests PRIVATE RENDER_MODULE_TEST_HEADLESS)
         endif()
 
+        add_test(NAME root_framebuffer_desktop COMMAND RenderModuleOutputTests root desktop)
+        set_tests_properties(root_framebuffer_desktop PROPERTIES TIMEOUT 30)
         add_test(NAME desktop_backend COMMAND RenderModuleDesktopTests --backend)
         add_test(NAME desktop_render COMMAND RenderModuleDesktopTests --render)
         set_tests_properties(desktop_backend desktop_render PROPERTIES TIMEOUT 30)
@@ -330,6 +342,12 @@ if(RENDER_MODULE_BUILD_TESTS)
         endif()
     endif()
     if(RENDER_MODULE_ENABLE_HEADLESS)
+        foreach(test root resize visual)
+            add_test(NAME headless_output_${test}
+                COMMAND ${CMAKE_COMMAND} -E env --unset=DISPLAY --unset=WAYLAND_DISPLAY
+                    $<TARGET_FILE:RenderModuleOutputTests> ${test} headless)
+            set_tests_properties(headless_output_${test} PROPERTIES TIMEOUT 60 LABELS headless)
+        endforeach()
         add_executable(RenderModuleHeadlessTests tests/headless_tests.cpp)
         target_include_directories(RenderModuleHeadlessTests PRIVATE src)
         target_link_libraries(RenderModuleHeadlessTests PRIVATE RenderModule::RenderModule OpenGL::EGL)

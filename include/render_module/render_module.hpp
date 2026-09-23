@@ -28,7 +28,7 @@ public:
 
     // Returns false and prints a diagnostic when initialization fails.
     static bool Init(int width, int height, double fps = 30.0, const char* title = "RenderModule");
-    // Headless currently renders Canvas/View3D targets only, not the final UI.
+    // Both backends compose the complete UI into an owned root framebuffer.
     static bool Init(const render_module::Config& config);
     static void EnableRootWindowDocking();
     static void RegisterImGuiCallback(std::function<void()> callback);
@@ -46,6 +46,9 @@ public:
     static void ZoomView(std::function<void(NVGcontext*)> callback);
     static void IsolatedFrameBuffer(std::function<void(NVGcontext*)> userFramebufferRender); 
     static void Run();
+    // Diagnostic synchronous capture of the last completed UI frame. Call on the
+    // render thread, after Run() returns and before Shutdown(); false if no frame.
+    static bool SaveScreenshot(const std::string& path);
     static void RequestClose();
     static void Shutdown();
     static render_module::Vec2 GetWindowSize();

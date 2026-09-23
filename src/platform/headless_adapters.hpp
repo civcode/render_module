@@ -7,6 +7,6 @@
 namespace render_module::detail {
 // Frame metrics only: no GLFW input, remote events, clipboard, or cursor support.
 std::unique_ptr<IInputBackend> CreateHeadlessFrameInput(PlatformSize size);
-// Submit existing per-window GPU work, but don't compose or present the final UI.
+// Image presenter consumes complete root frames; readback is on-demand.
 std::unique_ptr<IPresenter> CreateHeadlessPresenter();
 } // namespace render_module::detail

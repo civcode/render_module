@@ -1,4 +1,5 @@
 #include "headless_adapters.hpp"
+#include "present/image_presenter.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -20,6 +21,7 @@ public:
         initialized_ = true;
         return true;
     }
+    void SetDisplaySize(int width, int height) override { size_ = {width, height}; }
     void NewFrame() override {
         auto& io = ImGui::GetIO();
         const auto now = Clock::now();
@@ -40,17 +42,12 @@ private:
     bool initialized_ = false;
 };
 
-class HeadlessPresenter final : public IPresenter {
-public:
-    bool UsesDefaultFramebuffer() const override { return false; }
-    void Present() override { glFlush(); }
-};
 } // namespace
 
 std::unique_ptr<IInputBackend> CreateHeadlessFrameInput(PlatformSize size) {
     return std::make_unique<HeadlessFrameInput>(size);
 }
 std::unique_ptr<IPresenter> CreateHeadlessPresenter() {
-    return std::make_unique<HeadlessPresenter>();
+    return std::make_unique<ImagePresenter>();
 }
 } // namespace render_module::detail

@@ -24,8 +24,9 @@ render_module.cpp and zoom_view.cpp.
   `Init(width, height, fps, title)` selects this backend.
 - `src/input/` adapts `imgui_impl_glfw` behind `IInputBackend`; it installs native
   callbacks and supplies ImGui display size, framebuffer scale, and frame timing.
-- `src/present/` implements `IPresenter` with `DesktopPresenter`, which swaps the
-  GLFW default framebuffer after ImGui renders. No root FBO is introduced here.
+- `src/present/` consumes already-completed root frames. `DesktopPresenter`
+  blits to the GLFW default framebuffer and swaps; `ImagePresenter` provides
+  on-demand synchronous PNG capture.
 
 The core contains no GLFW calls or window pointer. Input and presentation borrow
 backend resources and are destroyed before the platform. Initialization, `Run()`,
@@ -53,10 +54,9 @@ platform responsibilities. Public headers contain no GLFW/EGL/Magnum types.
 - Headless frame metrics supply only size, scale, and monotonic delta time to
   ImGui; they are **not** a remote input backend. There are no input events,
   clipboard/cursor hooks, or remote queues.
-- Existing Canvas and View3D FBOs render normally. The headless presenter flushes
-  their GPU work but has no final output target. The core skips framebuffer-0
-  clearing and final ImGui rendering, even on the pbuffer path. **There is no root
-  UI FBO, screenshot API, final headless composition, or Phase 3 implementation.**
+- Existing Canvas and View3D FBOs feed the same root UI composition as Desktop.
+  Headless dimensions come from `Config`, never the native pbuffer size.
+  No remote input, networking, encoding, or Phase 4 implementation is present.
 
 ### Magnum loader
 
@@ -81,7 +81,68 @@ References: [GLFW 3.5 release notes](https://www.glfw.org/docs/latest/news.html)
 [EGL surfaceless contexts](https://registry.khronos.org/EGL/extensions/KHR/EGL_KHR_surfaceless_context.txt),
 [optional DRM render-node metadata](https://registry.khronos.org/EGL/extensions/EXT/EGL_EXT_device_drm_render_node.txt).
 
-## Frame flow
+## Root output and presentation (Phase 3)
+
+```text
+Rendering core (ImGui + ImPlot + Canvas + View3D + docking/overlays/console)
+    ↓ final ImGui draw list, rendered exactly once by the core
+RootFramebuffer (RGBA8)
+    ↓ PresentedFrame
+Presenter
+    ├ DesktopPresenter → blit to default framebuffer → swap
+    └ ImagePresenter   → optional synchronous readback → PNG
+```
+
+`src/core/root_framebuffer.*` owns a single-sample `GL_RGBA8` color texture/FBO,
+without depth/stencil. Creation checks completeness. Resize validates positive
+sizes against texture/viewport limits, allocates replacement storage first, and
+commits only on success. Same-size resize is a no-op; successful recreation
+increments generation. The old completed frame survives failed resize.
+
+`PresentedFrame` contains physical dimensions, frame ID, storage generation, and
+steady-clock start/completion timestamps. It is a synchronous borrowed view, not
+a GL owner. Its validity token expires on resize/destruction and is invalidated
+when the next frame begins; stale descriptors return zero from GL handle
+accessors and are rejected by both presenters. Neither presenter calls ImGui.
+A future WebPresenter will consume this same descriptor, but is not implemented.
+
+The core binds root before callbacks and rebinds it for final composition.
+Per-window FBO creation/rendering and `IsolatedFrameBuffer()` restore independent
+read/draw bindings and viewport even on exceptions. Final composition establishes
+viewport, color-write mask, scissor-disabled clear, and disabled framebuffer-sRGB
+conversion. Existing NanoVG/View3D texture UV conventions are unchanged.
+
+Desktop normally uses **1:1 physical framebuffer pixels**, retaining logical
+ImGui sizes and GLFW framebuffer scale for HiDPI. If a window changes size between
+render and presentation, nearest-neighbor blitting uniformly fits the root into
+centered black letterboxing (no aspect-ratio stretching). Blit disables scissor
+and sRGB conversion and restores GL state. Zero-sized/minimized surfaces skip
+rendering/presentation without allocating zero-sized root storage.
+
+Headless uses explicit virtual dimensions and framebuffer scale 1. The internal
+`RequestVirtualDisplaySize()` validates requests, then commits root storage and
+frame metrics together at the next frame boundary. Allocation failure stops the
+loop with diagnostics and retains old storage/size. There is no browser resize
+protocol or input event queue.
+
+`ImagePresenter` uses synchronous `glReadPixels(GL_RGBA, GL_UNSIGNED_BYTE)` and
+restores read-buffer, framebuffer, and pixel-pack state. It temporarily unbinds
+any caller-owned pack buffer; it does not create or use PBOs. **The sole output
+vertical flip** reverses CPU rows immediately after readback, from GL bottom-origin
+to top-origin RGBA. PNG encoding does not flip; Desktop blitting does not flip.
+A path-less headless presenter only flushes work—readback occurs on explicit
+capture, not every frame. The PNG writer is reused from pinned NanoVG; see
+[PNG_NOTICE.md](third_party/PNG_NOTICE.md).
+
+Shutdown, with the context current: presenter → root → Canvas/View3D GPU storage
+→ Magnum renderer/tracker → NanoVG → ImGui renderer/platform and ImPlot/ImGui
+contexts → native graphics context. Screenshot handles never escape the public
+API; `SaveScreenshot(path)` is a narrow diagnostic addition.
+
+Reference: Khronos [framebuffer blits](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glBlitFramebuffer.xhtml)
+and [pixel readback](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glReadPixels.xhtml).
+
+## Per-window frame flow
 
 For every visible 2D canvas window:
 

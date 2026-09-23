@@ -20,6 +20,7 @@ int main(int argc, char** argv) {
     config.fps = 60.0;
     config.title = "RenderModule 3D Demo";
     int frameLimit = 0;
+    std::string screenshot;
     for (int i = 1; i < argc; ++i) {
         const std::string_view option = argv[i];
         const std::string_view value = i + 1 < argc ? argv[++i] : "";
@@ -31,6 +32,8 @@ int main(int argc, char** argv) {
             config.headlessContext = render_module::HeadlessContext::GlfwNullEgl;
         else if (option == "--headless-context" && value == "native-egl")
             config.headlessContext = render_module::HeadlessContext::NativeEgl;
+        else if (option == "--screenshot" && !value.empty())
+            screenshot = value;
         else if (option == "--frames" && !value.empty()) {
             const auto parsed = std::from_chars(value.data(), value.data() + value.size(), frameLimit);
             if (parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() && frameLimit > 0)
@@ -39,7 +42,7 @@ int main(int argc, char** argv) {
             return 1;
         } else {
             std::fprintf(stderr, "Usage: %s [--render-backend desktop|headless] "
-                "[--headless-context glfw-null-egl|native-egl] [--frames N]\n", argv[0]);
+                "[--headless-context glfw-null-egl|native-egl] [--frames N] [--screenshot output.png]\n", argv[0]);
             return 1;
         }
     }
@@ -84,7 +87,8 @@ int main(int argc, char** argv) {
         if (ImGui::Button("Top view")) topCameraRequested = true;
         ImGui::Text("Camera T_world_camera position: (%.2f, %.2f, %.2f)",
                     cameraPose.position.x, cameraPose.position.y, cameraPose.position.z);
-        ImGui::Text("FPS: %.1f", RenderModule::GetFPS());
+        if (screenshot.empty()) ImGui::Text("FPS: %.1f", RenderModule::GetFPS());
+        else ImGui::TextUnformatted("Full UI screenshot mode");
         ImGui::End();
     });
 
@@ -178,12 +182,17 @@ int main(int argc, char** argv) {
     }, options);
 
     RenderModule::Run();
+    const bool captured = screenshot.empty() || RenderModule::SaveScreenshot(screenshot);
     RenderModule::Shutdown();
+    if (!captured) {
+        std::fprintf(stderr, "Could not save screenshot '%s'.\n", screenshot.c_str());
+        return 1;
+    }
     if (frameLimit > 0 && renderedViews == 0) {
         std::fprintf(stderr, "3D demo did not render its scene.\n");
         return 1;
     }
     if (config.backend == render_module::Backend::Headless)
-        std::fprintf(stderr, "Headless 3D demo rendered %d scene frames (no final UI output).\n", renderedViews);
+        std::fprintf(stderr, "Headless 3D demo composed %d scene frames into the root UI framebuffer.\n", renderedViews);
     return 0;
 }

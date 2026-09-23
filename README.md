@@ -14,7 +14,7 @@ The 3D layer is intentionally integrated into RenderModule instead of owning a s
 
 Requires CMake 3.16+, a C/C++17 toolchain, and OpenGL development files. GLFW is
 fetched at **3.5.1**; older system GLFW installations are not used. Corrade and
-Magnum are pinned to tested commits. GLAD, ImGui, ImPlot, NanoVG, and fonts are
+Magnum and NanoVG are pinned to tested commits. GLAD, ImGui, ImPlot, and fonts are
 also fetched, so the first configure requires network access.
 
 Linux Desktop builds additionally need X11/Wayland development packages (the
@@ -43,7 +43,7 @@ cmake --install build --prefix "$HOME/.local"
 
 To omit examples, configure with `-DRENDER_MODULE_BUILD_EXAMPLES=OFF`.
 
-## Linux headless rendering (Phase 2)
+## Linux headless rendering and screenshots
 
 ~~~sh
 cmake -S . -B build-headless -DCMAKE_BUILD_TYPE=Release \
@@ -71,11 +71,11 @@ if (!RenderModule::Init(config)) return 1;
 // Register existing callbacks and call Run(); use RequestClose() to terminate.
 ~~~
 
-The existing 3D demo can render its full scene offscreen for a finite smoke run:
+The existing 3D demo can save its complete UI, including controls and docking:
 
 ~~~sh
 env -u DISPLAY -u WAYLAND_DISPLAY ./build-headless/Release/bin/RenderModule3DDemo \
-  --render-backend headless --headless-context glfw-null-egl --frames 3
+  --render-backend headless --headless-context glfw-null-egl --frames 5 --screenshot output.png
 # Use --headless-context native-egl for the native provider.
 ~~~
 
@@ -88,10 +88,22 @@ device enumeration, surfaceless contexts, and a logged same-device pbuffer
 fallback; it is the path intended for non-Mesa drivers such as NVIDIA. Startup
 prints provider/device, GL vendor/renderer/version, GLSL, and EGL vendor/version.
 
-**Phase 2 limitation:** Canvas/View3D render into their existing FBOs, but final
-ImGui output is not rendered or presented in headless mode. No root UI FBO,
-screenshot/stream output, remote input, browser functionality, or OSMesa provider
-is implemented. No window-system events close a headless run automatically.
+Both backends now compose the complete UI into an owned RGBA8 root framebuffer.
+Desktop blits that output to its window; headless capture requires no default
+framebuffer. Screenshot mode suppresses the demo's changing FPS text.
+
+For a diagnostic capture in application code, call
+`RenderModule::SaveScreenshot("output.png")` on the render thread after `Run()`
+returns and before `Shutdown()`. It returns false if no completed frame exists,
+readback fails, or writing fails. This is synchronous RGBA8 readback, with a
+256 MiB capture limit and no per-frame readback when capture is not requested.
+PNG images are top-origin; the sole output flip occurs immediately after GL
+readback. The small public-domain writer is reused from the existing NanoVG
+source tree; see [third_party/PNG_NOTICE.md](third_party/PNG_NOTICE.md).
+
+Remote input, browser functionality, encoding/streaming, async PBO readback, and
+OSMesa are not implemented. No window-system events close a headless run
+automatically; use `RequestClose()` or the demo's `--frames` option.
 
 ### Regression tests
 
@@ -110,8 +122,13 @@ both display variables. Enable headless support at configure time to include
 
 Tests cover context/proc loading, input callbacks, resize/scale, presentation,
 existing 2D/3D APIs, close/reinitialization, invalid device selection, and
-Desktop/EGL transitions. Headless tests verify actual NanoVG and Magnum pixels
-read from existing per-window FBOs, not a root framebuffer or screenshot API.
+Desktop/EGL transitions. Root tests cover RGBA8 creation, completeness failure,
+transactional resize, generation/lifetime invalidation, binding restoration,
+orientation, and PNG decode. The deterministic full-root scene includes ImGui,
+ImPlot, NanoVG, View3D, docking, clipping, and an overlay. See
+[tests/golden/README.md](tests/golden/README.md) for the comparison policy and
+failure artifacts. The Desktop test compares root output against the old direct
+ImGui rendering path (≤1 RGB code value), plus blit orientation/letterboxing.
 The `desktop_no_display` test verifies that the legacy overload still fails
 cleanly without a display.
 

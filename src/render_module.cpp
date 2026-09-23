@@ -21,6 +21,10 @@
 #include "platform/platform_backend.hpp"
 #include "input/input_backend.hpp"
 #include "present/presenter.hpp"
+#include "present/image_presenter.hpp"
+#include "core/root_framebuffer.hpp"
+#include "core/framebuffer_state.hpp"
+#include "core/render_output.hpp"
 #include "canvas_internal.hpp"
 #include "view3d_internal.hpp"
 #include "render_module/zoom_view.hpp"
@@ -59,6 +63,11 @@ struct AppContext {
     std::unique_ptr<render_module::detail::IPlatformBackend> platform;
     std::unique_ptr<render_module::detail::IInputBackend> input;
     std::unique_ptr<render_module::detail::IPresenter> presenter;
+    std::unique_ptr<render_module::detail::RootFramebuffer> root;
+    render_module::detail::PlatformSize virtualDisplay;
+    render_module::detail::PlatformSize pendingDisplay;
+    bool headless = false;
+    std::uint64_t nextFrameId = 0;
     NVGcontext* vg = nullptr;
     std::vector<std::function<void()>> imguiCallbacks;
     std::vector<PaintWindow> paintWindows;
@@ -92,6 +101,7 @@ void DestroyFBO(WindowT& window) {
 
 template<class WindowT>
 bool CreateFBO(WindowT& window, int pixelWidth, int pixelHeight) {
+    const render_module::detail::FramebufferState framebufferState;
     DestroyFBO(window);
 
     glGenFramebuffers(1, &window.fbo);
@@ -119,7 +129,6 @@ bool CreateFBO(WindowT& window, int pixelWidth, int pixelHeight) {
         glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     if (!complete) {
         std::fprintf(stderr, "RenderModule: framebuffer creation failed for '%s'.\n",
@@ -264,6 +273,7 @@ void DrawStatusOverlay(ImDrawList* drawList, ImVec2 topLeft, const std::string& 
 }
 
 void Render3DWindow(View3DWindow& window) {
+    const render_module::detail::FramebufferState framebufferState;
     const bool visible = ImGui::Begin(window.name.c_str());
     if (!visible) {
         ImGui::End();
@@ -295,11 +305,6 @@ void Render3DWindow(View3DWindow& window) {
         return;
     }
 
-    GLint previousFBO = 0;
-    GLint previousViewport[4] = {};
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFBO);
-    glGetIntegerv(GL_VIEWPORT, previousViewport);
-
     glBindFramebuffer(GL_FRAMEBUFFER, window.fbo);
     glViewport(0, 0, pixelWidth, pixelHeight);
     // glClear() honors write masks. External renderers may have changed them,
@@ -319,16 +324,9 @@ void Render3DWindow(View3DWindow& window) {
         status = render_module::detail::RenderView3D(
             *window.storage, {size.x, size.y}, input, window.options, window.callback);
     } catch (...) {
-        glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
-        glViewport(previousViewport[0], previousViewport[1],
-                   previousViewport[2], previousViewport[3]);
         ImGui::End();
         throw;
     }
-
-    glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
-    glViewport(previousViewport[0], previousViewport[1],
-               previousViewport[2], previousViewport[3]);
 
     // OpenGL renders FBO textures bottom-up relative to ImGui screen space.
     // Flip V so the 3D view appears upright while input remains +Y-up.
@@ -342,6 +340,7 @@ void Render3DWindow(View3DWindow& window) {
 }
 
 void RenderPaintWindow(PaintWindow& window) {
+    const render_module::detail::FramebufferState framebufferState;
     if (window.offscreenCallback) {
         window.offscreenCallback(ctx.vg);
     }
@@ -381,11 +380,6 @@ void RenderPaintWindow(PaintWindow& window) {
         return;
     }
 
-    GLint previousFBO = 0;
-    GLint previousViewport[4] = {};
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFBO);
-    glGetIntegerv(GL_VIEWPORT, previousViewport);
-
     glBindFramebuffer(GL_FRAMEBUFFER, window.fbo);
     glViewport(0, 0, pixelWidth, pixelHeight);
     glClearColor(0.16f, 0.18f, 0.21f, 1.0f);
@@ -404,18 +398,11 @@ void RenderPaintWindow(PaintWindow& window) {
     } catch (...) {
         render_module::detail::SetCurrentCanvas(previousCanvas);
         nvgEndFrame(ctx.vg);
-        glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
-        glViewport(previousViewport[0], previousViewport[1],
-                   previousViewport[2], previousViewport[3]);
         ImGui::End();
         throw;
     }
     render_module::detail::SetCurrentCanvas(previousCanvas);
     nvgEndFrame(ctx.vg);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
-    glViewport(previousViewport[0], previousViewport[1],
-               previousViewport[2], previousViewport[3]);
 
     // Deliberately leave the texture UVs unflipped. This makes NanoVG's FBO
     // coordinates appear as engineering-style +Y-up canvas coordinates.
@@ -456,6 +443,9 @@ bool RenderModule::Init(const render_module::Config& config) {
     }
 
     ctx.fpsSetpoint = std::max(0.0, config.fps);
+    ctx.headless = config.backend == render_module::Backend::Headless;
+    ctx.virtualDisplay = {config.width, config.height};
+    ctx.pendingDisplay = {};
     ctx.platform = render_module::detail::CreatePlatformBackend(config);
     if (!ctx.platform) return false;
     if (!ctx.platform->Initialize(config.width, config.height, config.title.c_str()) ||
@@ -481,6 +471,7 @@ bool RenderModule::Init(const render_module::Config& config) {
     ImPlot::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.ConfigFlags &= ~ImGuiConfigFlags_ViewportsEnable; // One canonical output.
 
     ImGui::StyleColorsLight();
     ImGuiStyle& style = ImGui::GetStyle();
@@ -511,6 +502,13 @@ bool RenderModule::Init(const render_module::Config& config) {
     }
     nvg::SetContext(ctx.vg);
     LoadFonts(ctx.vg);
+    ctx.root = std::make_unique<render_module::detail::RootFramebuffer>();
+    auto output = ctx.headless ? ctx.virtualDisplay : ctx.platform->GetFramebufferSize();
+    if (output.width <= 0 || output.height <= 0) output = ctx.virtualDisplay;
+    if (!ctx.root->Resize(output.width, output.height)) {
+        Shutdown();
+        return false;
+    }
     ctx.initialized = true;
     return true;
 }
@@ -582,12 +580,25 @@ void RenderModule::Run() {
         const auto frameStart = Clock::now();
         ctx.platform->PollEvents();
 
-        const auto display = ctx.platform->GetFramebufferSize();
-        glViewport(0, 0, display.width, display.height);
-        if (ctx.presenter->UsesDefaultFramebuffer()) {
-            glClearColor(0.35f, 0.36f, 0.39f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
+        const auto display = ctx.headless
+            ? (ctx.pendingDisplay.width ? ctx.pendingDisplay : ctx.virtualDisplay)
+            : ctx.platform->GetFramebufferSize();
+        if (display.width <= 0 || display.height <= 0) {
+            // A minimized Desktop surface is not a zero-sized render target.
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
         }
+        if (!ctx.root->Resize(display.width, display.height)) {
+            std::fprintf(stderr, "RenderModule: output resize failed; stopping render loop.\n");
+            break;
+        }
+        if (ctx.headless) {
+            ctx.virtualDisplay = display;
+            ctx.pendingDisplay = {};
+            ctx.input->SetDisplaySize(display.width, display.height);
+        }
+        ctx.root->BeginFrame();
+        glViewport(0, 0, display.width, display.height);
 
         ImGui_ImplOpenGL3_NewFrame();
         ctx.input->NewFrame();
@@ -606,12 +617,20 @@ void RenderModule::Run() {
             Render3DWindow(window);
 
         ImGui::Render();
-        // Phase 2 renders existing per-window targets only in headless mode.
-        // Never draw to framebuffer 0 on a surfaceless context. Root UI output
-        // and final headless composition belong to Phase 3, not this backend.
-        if (ctx.presenter->UsesDefaultFramebuffer())
-            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-        ctx.presenter->Present();
+        // Callbacks/external renderers cannot redirect final composition.
+        glBindFramebuffer(GL_FRAMEBUFFER, ctx.root->Framebuffer());
+        glViewport(0, 0, ctx.root->Width(), ctx.root->Height());
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_FRAMEBUFFER_SRGB);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glClearColor(0.35f, 0.36f, 0.39f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        const auto frame = ctx.root->Complete(++ctx.nextFrameId, frameStart, Clock::now());
+        if (!ctx.presenter->Present(frame)) {
+            std::fprintf(stderr, "RenderModule: presentation failed; stopping render loop.\n");
+            break;
+        }
 
         if (ctx.fpsSetpoint > 0.0)         {
             const auto framePeriod = std::chrono::duration<double>(1.0/ctx.fpsSetpoint);
@@ -633,17 +652,9 @@ void RenderModule::RequestClose() {
 void RenderModule::IsolatedFrameBuffer(
     std::function<void(NVGcontext*)> userFramebufferRender) {
     if (!ctx.vg || !userFramebufferRender) return;
-
-    GLint previousFBO = 0;
-    GLint previousViewport[4] = {};
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFBO);
-    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    const render_module::detail::FramebufferState framebufferState;
 
     userFramebufferRender(ctx.vg);
-    nvgluBindFramebuffer(nullptr);
-    glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
-    glViewport(previousViewport[0], previousViewport[1],
-               previousViewport[2], previousViewport[3]);
 }
 
 void RenderModule::Shutdown() {
@@ -654,6 +665,8 @@ void RenderModule::Shutdown() {
         return;
     }
     Console().SetCoutRedirect(false);
+    ctx.presenter.reset();
+    ctx.root.reset();
     for (PaintWindow& window : ctx.paintWindows) DestroyFBO(window);
     ctx.paintWindows.clear();
     for (View3DWindow& window : ctx.view3DWindows) DestroyFBO(window);
@@ -674,17 +687,19 @@ void RenderModule::Shutdown() {
     }
     ctx.input.reset(); // Shuts down platform input while ImGui and the window live.
     if (ImGui::GetCurrentContext()) ImGui::DestroyContext();
-    ctx.presenter.reset();
     ctx.platform.reset();
 
     ctx.initialized = false;
+    ctx.virtualDisplay = {};
+    ctx.pendingDisplay = {};
+    ctx.nextFrameId = 0;
     ctx.fpsCurrent = 0.0;
     ctx.deltaTime = 0.0;
 }
 
 render_module::Vec2 RenderModule::GetWindowSize() {
     if (!ctx.platform || !ctx.platform->IsInitialized()) return {};
-    const auto size = ctx.platform->GetWindowSize();
+    const auto size = ctx.headless ? ctx.virtualDisplay : ctx.platform->GetWindowSize();
     return {static_cast<float>(size.width), static_cast<float>(size.height)};
 }
 
@@ -708,6 +723,23 @@ double RenderModule::GetDeltaTime() {
 bool RenderModule::IsInitialized() {
     return ctx.initialized;
 }
+
+bool RenderModule::SaveScreenshot(const std::string& path) {
+    if (!ctx.initialized || !ctx.root || !ctx.root->Frame().IsValid() || path.empty()) return false;
+    if (!ctx.platform->MakeCurrent()) return false;
+    render_module::detail::ImagePresenter image(path);
+    return image.Present(ctx.root->Frame());
+}
+
+namespace render_module::detail {
+PresentedFrame CompletedFrame() { return ctx.root ? ctx.root->Frame() : PresentedFrame{}; }
+bool RequestVirtualDisplaySize(int width, int height) {
+    if (!ctx.initialized || !ctx.headless || !ctx.platform->MakeCurrent() ||
+        !RootFramebuffer::ValidSize(width, height)) return false;
+    ctx.pendingDisplay = {width, height};
+    return true;
+}
+} // namespace render_module::detail
 
 ImGuiID RenderModule::GetRootDockspaceID()
 {

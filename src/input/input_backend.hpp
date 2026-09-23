@@ -8,6 +8,8 @@ public:
     virtual ~IInputBackend() = default;
     virtual bool Init() = 0;
     virtual void NewFrame() = 0;
+    // Frame metrics only; Desktop continues to obtain size from its window.
+    virtual void SetDisplaySize(int, int) {}
     virtual void Shutdown() = 0;
 };
 
