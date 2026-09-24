@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string_view>
 #include <vector>
 
@@ -28,6 +29,16 @@ int main(int argc, char** argv) {
             config.backend = render_module::Backend::Desktop;
         else if (option == "--render-backend" && value == "headless")
             config.backend = render_module::Backend::Headless;
+        else if (option == "--render-backend" && value == "web")
+            config.backend = render_module::Backend::Web;
+        else if (option == "--web-bind" && !value.empty()) config.web.bindAddress = value;
+        else if (option == "--web-origin" && !value.empty()) config.web.allowedOrigins.emplace_back(value);
+        else if (option == "--web-port" && !value.empty()) {
+            unsigned port = 0;
+            const auto parsed = std::from_chars(value.data(), value.data()+value.size(), port);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data()+value.size() || port > 65535) return 1;
+            config.web.port = static_cast<std::uint16_t>(port);
+        }
         else if (option == "--headless-context" && value == "glfw-null-egl")
             config.headlessContext = render_module::HeadlessContext::GlfwNullEgl;
         else if (option == "--headless-context" && value == "native-egl")
@@ -41,13 +52,18 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "--frames requires a positive integer.\n");
             return 1;
         } else {
-            std::fprintf(stderr, "Usage: %s [--render-backend desktop|headless] "
-                "[--headless-context glfw-null-egl|native-egl] [--frames N] [--screenshot output.png]\n", argv[0]);
+            std::fprintf(stderr, "Usage: %s [--render-backend desktop|headless|web] "
+                "[--headless-context glfw-null-egl|native-egl] [--frames N] [--screenshot output.png] "
+                "[--web-bind 127.0.0.1] [--web-port 8080] [--web-origin http://host:port]\n", argv[0]);
             return 1;
         }
     }
+    if (config.backend == render_module::Backend::Web) {
+        config.fps = 30;
+        if (const char* token = std::getenv("RENDER_MODULE_WEB_TOKEN")) config.web.authToken = token;
+    }
     if (!RenderModule::Init(config)) return 1;
-    if (config.backend == render_module::Backend::Headless)
+    if (config.backend != render_module::Backend::Desktop)
         ImGui::GetIO().IniFilename = nullptr; // Deterministic offscreen demo layout.
     RenderModule::EnableRootWindowDocking();
     int frames = 0;

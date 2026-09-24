@@ -9,6 +9,11 @@ option(RENDER_MODULE_BUILD_EXAMPLES "Build RenderModule examples" ON)
 option(RENDER_MODULE_BUILD_TESTS "Build RenderModule regression tests" OFF)
 option(RENDER_MODULE_ENABLE_DESKTOP "Build the existing Desktop backend" ON)
 option(RENDER_MODULE_ENABLE_HEADLESS "Build Linux GLFW Null/EGL and native EGL backends" OFF)
+option(RENDER_MODULE_ENABLE_WEB "Build temporary JPEG/WebSocket development backend" OFF)
+option(RENDER_MODULE_BUILD_BROWSER_TESTS "Run installed Playwright Chromium tests" OFF)
+if(RENDER_MODULE_ENABLE_WEB AND NOT RENDER_MODULE_ENABLE_HEADLESS)
+    message(FATAL_ERROR "Web requires RENDER_MODULE_ENABLE_HEADLESS=ON")
+endif()
 
 if(RENDER_MODULE_ENABLE_HEADLESS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(FATAL_ERROR "RenderModule: headless EGL backends currently require Linux")
@@ -210,6 +215,29 @@ if(RENDER_MODULE_ENABLE_HEADLESS)
     target_link_libraries(RenderModule PRIVATE OpenGL::EGL ${CMAKE_DL_LIBS})
 endif()
 
+if(RENDER_MODULE_ENABLE_WEB)
+    find_package(Boost 1.75 REQUIRED COMPONENTS system json)
+    find_package(JPEG REQUIRED)
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/web/index.html" WEB_HTML)
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/web/app.mjs" WEB_JS)
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/web/style.css" WEB_CSS)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        web/index.html web/app.mjs web/style.css)
+    configure_file(src/web/web_assets.cpp.in generated/web_assets.cpp @ONLY)
+    target_sources(RenderModule PRIVATE src/web/web_protocol.cpp src/web/web_server.cpp
+        src/web/jpeg_encode.c src/present/web_presenter.cpp
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/web_assets.cpp")
+    target_link_libraries(RenderModule PRIVATE Boost::system Boost::json JPEG::JPEG)
+    execute_process(COMMAND git describe --always --dirty --exclude "*"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" OUTPUT_VARIABLE WEB_BUILD_ID
+        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(NOT WEB_BUILD_ID)
+        set(WEB_BUILD_ID "source-archive")
+    endif()
+    target_compile_definitions(RenderModule PRIVATE RENDER_MODULE_ENABLE_WEB
+        RENDER_MODULE_WEB_BUILD_ID="${WEB_BUILD_ID}" RENDER_MODULE_WEB_VERSION="${PROJECT_VERSION}")
+endif()
+
 find_package(Threads REQUIRED)
 target_link_libraries(RenderModule PRIVATE Threads::Threads)
 # Committed UTF-8 includes supplementary planes; clients must share ImGui's ABI.
@@ -255,7 +283,8 @@ install(
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-install(FILES third_party/PNG_NOTICE.md DESTINATION ${CMAKE_INSTALL_DATADIR}/render-module/licenses)
+install(FILES third_party/PNG_NOTICE.md third_party/WEB_NOTICE.md
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/render-module/licenses)
 
 install(
     FILES ${glad_BINARY_DIR}/include/glad/glad.h
@@ -320,6 +349,34 @@ endif()
 
 if(RENDER_MODULE_BUILD_TESTS)
     enable_testing()
+    if(RENDER_MODULE_ENABLE_WEB)
+        add_executable(RenderModuleWebTests tests/web_tests.cpp)
+        target_include_directories(RenderModuleWebTests PRIVATE src)
+        target_link_libraries(RenderModuleWebTests PRIVATE RenderModule::RenderModule Boost::system Boost::json Threads::Threads)
+        foreach(test protocol server jpeg)
+            add_test(NAME web_${test} COMMAND ${CMAKE_COMMAND} -E env --unset=DISPLAY --unset=WAYLAND_DISPLAY
+                $<TARGET_FILE:RenderModuleWebTests> ${test})
+            set_tests_properties(web_${test} PROPERTIES TIMEOUT 45 LABELS "web;headless")
+        endforeach()
+        add_executable(RenderModuleWebFixture tests/web_fixture.cpp)
+        target_link_libraries(RenderModuleWebFixture PRIVATE RenderModule::RenderModule Boost::json)
+        find_program(RENDER_MODULE_NODE node)
+        if(RENDER_MODULE_NODE)
+            add_test(NAME web_js_helpers COMMAND ${RENDER_MODULE_NODE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/web/helpers_test.mjs)
+            set_tests_properties(web_js_helpers PROPERTIES TIMEOUT 30 LABELS web)
+        endif()
+        if(RENDER_MODULE_BUILD_BROWSER_TESTS)
+            if(NOT RENDER_MODULE_NODE)
+                message(FATAL_ERROR "Browser tests need Node.js; normal Web builds do not")
+            endif()
+            set(RENDER_MODULE_BROWSER_CACHE "${CMAKE_CURRENT_BINARY_DIR}/browser-cache" CACHE PATH "Playwright browser cache")
+            add_test(NAME web_chromium COMMAND ${CMAKE_COMMAND} -E env --unset=DISPLAY --unset=WAYLAND_DISPLAY
+                "PLAYWRIGHT_BROWSERS_PATH=${RENDER_MODULE_BROWSER_CACHE}" ${RENDER_MODULE_NODE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/web/browser_test.mjs $<TARGET_FILE:RenderModuleWebFixture>
+                ${CMAKE_CURRENT_BINARY_DIR}/test-artifacts/web)
+            set_tests_properties(web_chromium PROPERTIES TIMEOUT 120 LABELS "web;headless")
+        endif()
+    endif()
     add_executable(RenderModuleInputTests tests/input_tests.cpp)
     target_include_directories(RenderModuleInputTests PRIVATE src)
     target_link_libraries(RenderModuleInputTests PRIVATE RenderModule::RenderModule Threads::Threads)

@@ -1,0 +1,8 @@
+{
+  "name": "render-module-browser-tests",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

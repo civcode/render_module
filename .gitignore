@@ -1,3 +1,4 @@
 /build/
 /builddir/
 *.ini
+/tests/web/node_modules/

@@ -28,6 +28,12 @@ std::unique_ptr<IPlatformBackend> CreatePlatformBackend(const Config& config) {
             std::fprintf(stderr, "RenderModule: Desktop support was disabled at build time.\n");
             return nullptr;
 #endif
+        case Backend::Web:
+#ifndef RENDER_MODULE_ENABLE_WEB
+            std::fprintf(stderr, "RenderModule: Web support was disabled at build time.\n");
+            return nullptr;
+#endif
+            [[fallthrough]];
         case Backend::Headless:
 #ifdef RENDER_MODULE_ENABLE_HEADLESS
             switch (config.headlessContext) {

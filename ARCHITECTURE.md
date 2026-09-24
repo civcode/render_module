@@ -53,11 +53,11 @@ platform responsibilities. Public headers contain no GLFW/EGL/Magnum types.
   pbuffer on the same device. Pbuffer use may also be explicitly requested.
   Failed device selection/initialization never silently selects another GPU.
 - Headless input has no GLFW window/input dependency. The Null/EGL provider
-  still uses GLFW for **context creation only**. Clipboard, IME composition,
-  OS cursor hooks, and browser DPR handling are not implemented.
+  still uses GLFW for **context creation only**. Native clipboard, OS cursor and
+  IME hooks are not provided; the optional Web client handles committed text.
 - Existing Canvas and View3D FBOs feed the same root UI composition as Desktop.
   Headless dimensions come from `Config`, never the native pbuffer size.
-  Networking and encoding are not implemented.
+  The optional Web presenter adds HTTP/JPEG delivery without changing rendering.
 
 ### Magnum loader
 
@@ -91,7 +91,8 @@ RootFramebuffer (RGBA8)
     ↓ PresentedFrame
 Presenter
     ├ DesktopPresenter → blit to default framebuffer → swap
-    └ ImagePresenter   → optional synchronous readback → PNG
+    ├ ImagePresenter   → optional synchronous readback → PNG
+    └ WebPresenter     → synchronous readback → JPEG → WebSocket (Phase 5)
 ```
 
 `src/core/root_framebuffer.*` owns a single-sample `GL_RGBA8` color texture/FBO,
@@ -104,8 +105,8 @@ increments generation. The old completed frame survives failed resize.
 steady-clock start/completion timestamps. It is a synchronous borrowed view, not
 a GL owner. Its validity token expires on resize/destruction and is invalidated
 when the next frame begins; stale descriptors return zero from GL handle
-accessors and are rejected by both presenters. Neither presenter calls ImGui.
-A future WebPresenter will consume this same descriptor, but is not implemented.
+accessors and are rejected by presenters. No presenter calls ImGui.
+WebPresenter consumes this same descriptor and publishes only CPU-owned bytes.
 
 The core binds root before callbacks and rebinds it for final composition.
 Per-window FBO creation/rendering and `IsolatedFrameBuffer()` restore independent
@@ -123,8 +124,8 @@ rendering/presentation without allocating zero-sized root storage.
 Headless uses explicit virtual dimensions and framebuffer scale 1. The internal
 `RequestVirtualDisplaySize()` validates requests, then commits root storage and
 frame metrics together at the next frame boundary. Allocation failure stops the
-loop with diagnostics and retains old storage/size. There is no browser resize
-protocol; input events are independent of the resize request.
+loop with diagnostics and retains old storage/size. WebPresenter bridges a bounded
+viewport mailbox to this API; input events remain independent of resize requests.
 
 `ImagePresenter` uses synchronous `glReadPixels(GL_RGBA, GL_UNSIGNED_BYTE)` and
 restores read-buffer, framebuffer, and pixel-pack state. It temporarily unbinds
@@ -163,7 +164,7 @@ Desktop continues obtaining logical/physical metrics and time from GLFW.
 
 **Only the render thread calls ImGui.** The private `input/input_access.hpp`
 hook obtains a `shared_ptr<RemoteInputQueue>` on the render thread after Init;
-Desktop returns null. Future networking threads may retain that handle and
+Desktop returns null. The Web network thread retains that handle and
 only enqueue. Shutdown closes the queue under its mutex before destroying the
 backend; retained producer handles safely return `Closed`. No input API was
 added to installed public headers.
@@ -199,7 +200,7 @@ Acceptance order is FIFO, with an internal monotonic sequence number assigned
 under the mutex. Only **adjacent unconsumed MouseMove events** coalesce; clicks,
 wheel, keys, text, source changes, focus, and snapshots are barriers. Optional
 source sequence numbers reject values not greater than the last accepted value
-(`Stale`); there is no transport, session, or network sequencing protocol.
+(`Stale`); transport/session sequencing belongs to the Web adapter, not this queue.
 
 `Enqueue()` returns `Accepted`, `Coalesced`, `Full`, `Invalid`, `Stale`, or
 `Closed`. A full queue never evicts a reliable event or silently drops a release.
@@ -230,17 +231,47 @@ Snapshots reconcile missing and stale keys/buttons, normalized position, and
 focus through transitions. Aggregate modifier flags are authoritative: false
 clears both physical sides; true preserves supplied sides or supplies the left
 side if none is given. An unfocused snapshot releases everything. Snapshots
-provide authoritative recovery after lost events; no timers/transmission exist.
+provide authoritative recovery after lost events; the input backend itself has no
+network timers/transmission.
 
 Tests exercise concurrent producers, FIFO/overflow/cancellation, transitions,
 UTF-8, resize during trickling, and real widgets/Canvas/View3D with stable root
 storage. The Desktop interaction test uses installed GLFW callbacks. No new
-camera controller, remote Canvas path, or rendering/presentation path exists.
-**Phase 5/networking, browser code, encoding, and PBO readback are not started.**
+camera controller or remote Canvas path exists; Web adds only a presenter and
+network-to-existing-queue adapter.
 
 References: pinned Dear ImGui [input event processing](https://github.com/ocornut/imgui/blob/v1.91.9b-docking/imgui.cpp),
 [GLFW backend](https://github.com/ocornut/imgui/blob/v1.91.9b-docking/backends/imgui_impl_glfw.cpp),
 and [Unicode configuration](https://github.com/ocornut/imgui/blob/v1.91.9b-docking/imconfig.h).
+
+## Embedded Web UI (Phase 5)
+
+```text
+RootFramebuffer → WebPresenter → ImagePresenter::Read → libjpeg → immutable packet
+                                                                  ↓
+Browser canvas ← JPEG binary WebSocket ← WebServer (one Asio network thread)
+Browser input → JSON WebSocket → controller/validation → RemoteInputQueue
+                                                            ↓ render thread
+                                                    RemoteInputBackend → ImGui
+```
+
+`Backend::Web` selects an existing headless provider, the existing input backend,
+and `WebPresenter`. `IPresenter::PrepareFrame()` consumes the latest viewport
+request at a render boundary; normal rendering is otherwise unchanged. JPEG
+readback/encoding is synchronous and capped independently of render fps. No GL
+work or borrowed framebuffer handle crosses into the network thread.
+
+Boost.Beast/Asio and Boost.JSON stay private in `src/web/`; the presenter does not
+expose their types. Vanilla assets are compiled into the library. HTTP/WebSocket
+sessions have bounded parsing, write/control/frame queues and shutdown deadlines.
+FirstConnected controller authority, exact Origin checks and token/cookie
+validation are server-enforced. Controller loss/saturation invokes Phase 4's
+release-all cancellation barrier; no alternate ImGui or camera path is introduced.
+
+See [WEB_PROTOCOL.md](WEB_PROTOCOL.md) for protocol v1, explicit bounds, security,
+viewport negotiation, input details, diagnostics and test coverage. **JPEG/WS is
+a temporary development transport**, replaceable by WebRTC in Phase 7. Phase 6,
+video encoders, PBOs, hardware encoding and DataChannels are not implemented.
 
 ## Per-window frame flow
 

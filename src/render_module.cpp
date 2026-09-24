@@ -23,6 +23,9 @@
 #include "input/input_access.hpp"
 #include "present/presenter.hpp"
 #include "present/image_presenter.hpp"
+#ifdef RENDER_MODULE_ENABLE_WEB
+#include "present/web_presenter.hpp"
+#endif
 #include "core/root_framebuffer.hpp"
 #include "core/framebuffer_state.hpp"
 #include "core/render_output.hpp"
@@ -444,7 +447,7 @@ bool RenderModule::Init(const render_module::Config& config) {
     }
 
     ctx.fpsSetpoint = std::max(0.0, config.fps);
-    ctx.headless = config.backend == render_module::Backend::Headless;
+    ctx.headless = config.backend != render_module::Backend::Desktop;
     ctx.virtualDisplay = {config.width, config.height};
     ctx.pendingDisplay = {};
     ctx.platform = render_module::detail::CreatePlatformBackend(config);
@@ -482,12 +485,18 @@ bool RenderModule::Init(const render_module::Config& config) {
     style.ScrollbarRounding = 5.0f;
 
     ctx.input = ctx.platform->CreateInputBackend();
-    ctx.presenter = ctx.platform->CreatePresenter();
-    if (!ctx.input || !ctx.presenter || !ctx.input->Init()) {
+    if (!ctx.input || !ctx.input->Init()) {
         std::fprintf(stderr, "RenderModule: platform adapters initialization failed.\n");
         Shutdown();
         return false;
     }
+#ifdef RENDER_MODULE_ENABLE_WEB
+    if (config.backend == render_module::Backend::Web)
+        ctx.presenter = render_module::detail::CreateWebPresenter(config, ctx.input->EventQueue());
+    else
+#endif
+        ctx.presenter = ctx.platform->CreatePresenter();
+    if (!ctx.presenter) { Shutdown(); return false; }
     if (!ImGui_ImplOpenGL3_Init("#version 330")) {
         std::fprintf(stderr, "RenderModule: ImGui OpenGL backend initialization failed.\n");
         Shutdown();
@@ -581,6 +590,10 @@ void RenderModule::Run() {
     while (!ctx.platform->ShouldClose()) {
         const auto frameStart = Clock::now();
         ctx.platform->PollEvents();
+        if (!ctx.presenter->PrepareFrame()) {
+            std::fprintf(stderr, "RenderModule: frame preparation failed.\n");
+            break;
+        }
 
         const auto display = ctx.headless
             ? (ctx.pendingDisplay.width ? ctx.pendingDisplay : ctx.virtualDisplay)

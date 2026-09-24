@@ -108,14 +108,72 @@ source tree; see [third_party/PNG_NOTICE.md](third_party/PNG_NOTICE.md).
 
 Headless mode uses a private, browser-independent `RemoteInputBackend`, with a
 256-slot thread-safe typed event queue. It feeds ImGui's Add*Event APIs for mouse,
-keys/modifiers, committed UTF-8, focus, and state recovery. There is no public
-remote protocol: see [ARCHITECTURE.md](ARCHITECTURE.md#input-backends-phase-4)
+keys/modifiers, committed UTF-8, focus, and state recovery. The queue itself is
+transport-independent: see [ARCHITECTURE.md](ARCHITECTURE.md#input-backends-phase-4)
 for enqueue results, coalescing, release-all, and snapshot semantics.
 
-Browser functionality, networking, encoding/streaming, async PBO readback, and
-OSMesa are not implemented. Phase 5 has not started. No window-system events
-close a headless run automatically; use `RequestClose()` or the demo's `--frames`
-option.
+No window-system events close a headless run automatically; use `RequestClose()`
+or the demo's `--frames` option. OSMesa and async PBO readback are not implemented.
+
+## Embedded browser UI (Phase 5)
+
+**Temporary development transport: JPEG over WebSocket, not production video.**
+Web reuses the headless context, root framebuffer and Phase 4 input queue. No
+Desktop window is created. Phase 6/video encoding has not started; WebRTC replaces
+this transport in Phase 7.
+
+Install system Boost >=1.75 (System/JSON development packages) and libjpeg
+development files; tested with Boost 1.83 and libjpeg-turbo 2.1.5. Then:
+
+~~~sh
+cmake -S . -B build-web -DCMAKE_BUILD_TYPE=Release \
+  -DRENDER_MODULE_ENABLE_HEADLESS=ON -DRENDER_MODULE_ENABLE_DESKTOP=OFF \
+  -DRENDER_MODULE_ENABLE_WEB=ON -DRENDER_MODULE_BUILD_TESTS=ON
+cmake --build build-web --parallel
+# Optional authentication; do not place secrets in command-line arguments/URLs.
+export RENDER_MODULE_WEB_TOKEN="$(openssl rand -hex 16)"
+env -u DISPLAY -u WAYLAND_DISPLAY ./build-web/Release/bin/RenderModule3DDemo \
+  --render-backend web --headless-context native-egl --web-port 8080
+~~~
+
+Open `http://127.0.0.1:8080/` and enter the configured token. Without a token,
+loopback operation is permitted. In C++, select `Config.backend = Backend::Web`
+and set `Config.web`; environment token handling above belongs to the demo only.
+Defaults: 20 JPEG fps, quality 80, max 1920×1080, eight clients, FirstConnected
+controller with automatic promotion. The render cadence remains `Config.fps`.
+
+The embedded vanilla JS client supports Pointer Events/capture, physical keys,
+committed Unicode/IME/paste, normalized wheel input, debounced viewport requests,
+reconnect and input-state recovery. Viewers cannot send input or resize. HTTP
+assets require no Node/npm or asset directory at runtime. `/healthz` is public;
+`/api/version` exposes authenticated version/build/protocol and bounded counters.
+
+Default binding is **127.0.0.1**. Non-loopback binds require explicit allowed
+Origins and authentication, unless unauthenticated exposure is explicitly enabled.
+The server is plaintext HTTP/WS: use TLS termination/tunneling for remote access.
+See [WEB_PROTOCOL.md](WEB_PROTOCOL.md) for the wire format, limits, thread/lifetime
+boundaries, lease/auth/Origin/resize/input policies and known limitations.
+
+### Browser tests (development only)
+
+Node 20+ and Playwright's Linux browser dependencies are needed only for testing.
+The committed lockfile pins Playwright; install its matching Chromium once:
+
+~~~sh
+npm --prefix tests/web ci --cache "$PWD/build-web/npm-cache"
+PLAYWRIGHT_BROWSERS_PATH="$PWD/build-web/browser-cache" \
+  ./tests/web/node_modules/.bin/playwright install chromium
+cmake -S . -B build-web -DRENDER_MODULE_BUILD_BROWSER_TESTS=ON \
+  -DRENDER_MODULE_BROWSER_CACHE="$PWD/build-web/browser-cache"
+cmake --build build-web --parallel
+env -u DISPLAY -u WAYLAND_DISPLAY ctest --test-dir build-web -L web --output-on-failure
+~~~
+
+The Chromium test verifies rendered scene pixels, widgets, View3D drag, Unicode,
+clipboard and synthetic CJK composition, viewer isolation, rapid resize, blur and
+reconnect with held keys. It records a screenshot/log/state and FPS/CPU/encoding
+observations under `build-web/test-artifacts/web/`. Real OS IME and Firefox are
+not covered. Web C++/helper tests do not require Playwright.
 
 ### Regression tests
 
