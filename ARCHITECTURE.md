@@ -22,8 +22,9 @@ render_module.cpp and zoom_view.cpp.
   logical window size, and physical framebuffer size.
 - `GlfwDesktopBackend` owns GLFW and the window/context. The unchanged public
   `Init(width, height, fps, title)` selects this backend.
-- `src/input/` adapts `imgui_impl_glfw` behind `IInputBackend`; it installs native
-  callbacks and supplies ImGui display size, framebuffer scale, and frame timing.
+- `src/input/` provides `IInputBackend`. Desktop's `GlfwInputBackend` wraps
+  unchanged `imgui_impl_glfw` callbacks, display metrics, and timing; both
+  headless providers use `RemoteInputBackend` (see Phase 4 below).
 - `src/present/` consumes already-completed root frames. `DesktopPresenter`
   blits to the GLFW default framebuffer and swaps; `ImagePresenter` provides
   on-demand synchronous PNG capture.
@@ -51,12 +52,12 @@ platform responsibilities. Public headers contain no GLFW/EGL/Magnum types.
   If unsupported or creation/binding fails, it logs the reason and tries a 1×1
   pbuffer on the same device. Pbuffer use may also be explicitly requested.
   Failed device selection/initialization never silently selects another GPU.
-- Headless frame metrics supply only size, scale, and monotonic delta time to
-  ImGui; they are **not** a remote input backend. There are no input events,
-  clipboard/cursor hooks, or remote queues.
+- Headless input has no GLFW window/input dependency. The Null/EGL provider
+  still uses GLFW for **context creation only**. Clipboard, IME composition,
+  OS cursor hooks, and browser DPR handling are not implemented.
 - Existing Canvas and View3D FBOs feed the same root UI composition as Desktop.
   Headless dimensions come from `Config`, never the native pbuffer size.
-  No remote input, networking, encoding, or Phase 4 implementation is present.
+  Networking and encoding are not implemented.
 
 ### Magnum loader
 
@@ -123,7 +124,7 @@ Headless uses explicit virtual dimensions and framebuffer scale 1. The internal
 `RequestVirtualDisplaySize()` validates requests, then commits root storage and
 frame metrics together at the next frame boundary. Allocation failure stops the
 loop with diagnostics and retains old storage/size. There is no browser resize
-protocol or input event queue.
+protocol; input events are independent of the resize request.
 
 `ImagePresenter` uses synchronous `glReadPixels(GL_RGBA, GL_UNSIGNED_BYTE)` and
 restores read-buffer, framebuffer, and pixel-pack state. It temporarily unbinds
@@ -141,6 +142,105 @@ API; `SaveScreenshot(path)` is a narrow diagnostic addition.
 
 Reference: Khronos [framebuffer blits](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glBlitFramebuffer.xhtml)
 and [pixel readback](https://registry.khronos.org/OpenGL-Refpages/gl4/html/glReadPixels.xhtml).
+
+## Input backends (Phase 4)
+
+```text
+IInputBackend
+    ├── GlfwInputBackend → existing ImGui GLFW platform backend
+    └── RemoteInputBackend
+             ↓ drains RemoteInputQueue (producers enqueue only)
+        ImGuiIO Add*Event()
+             ↓ ImGui::NewFrame()
+        widgets / ReadCanvasInput() → CanvasInput → existing View3D navigation
+```
+
+The core calls `ImGui_ImplOpenGL3_NewFrame()`, then
+`input->BeginFrame(io, width, height, deltaTime)`, then `ImGui::NewFrame()`.
+It does not branch on input implementation. Remote metrics use root virtual
+pixels, scale `(1,1)`, and positive steady-clock delta (sanitized to 1µs–1s).
+Desktop continues obtaining logical/physical metrics and time from GLFW.
+
+**Only the render thread calls ImGui.** The private `input/input_access.hpp`
+hook obtains a `shared_ptr<RemoteInputQueue>` on the render thread after Init;
+Desktop returns null. Future networking threads may retain that handle and
+only enqueue. Shutdown closes the queue under its mutex before destroying the
+backend; retained producer handles safely return `Closed`. No input API was
+added to installed public headers.
+
+The private event variant contains `MouseMove`, `MouseButton`, `MouseWheel`,
+`Key`, `TextUtf8`, `Focus`, `MouseSource`, `InputStateSnapshot`, and `ReleaseAll`.
+It has no ImGui types and is **not a serialized wire format**:
+
+- Pointer coordinates have a top-left origin, remain normalized in `[0,1]`,
+  reject NaN/Inf, and clamp finite out-of-range values. Conversion to root
+  pixels happens on consumption. Positions behind transition barriers stay in
+  the producer queue until ImGui drains earlier input. On resize the current
+  normalized anchor is reprojected before pending transitions, without losing
+  fractional normalized precision to ImGui's pixel flooring.
+- Five mouse buttons and already-normalized horizontal/vertical wheel units
+  are supported. Mouse/Touch/Pen map to `AddMouseSourceEvent`; ImGui latches the
+  source onto the next actual mouse event, not an independent IO transition.
+- `RenderKey` covers letters, digits, navigation/editing, F1–F12, eight sided
+  modifiers, punctuation, locks/menu, and numpad. One checked mapping table
+  translates to ImGui keys. Physical left/right modifier state is ORed into
+  aggregate Ctrl/Shift/Alt/Super events before the associated key transition.
+- **Keys never generate text.** Committed UTF-8 is a separate event, at most
+  256 bytes, with fixed inline storage. Invalid UTF-8, embedded NUL, surrogates,
+  overlong sequences, and oversized payloads are rejected, never truncated.
+  Split larger commits at UTF-8 boundaries and retry on backpressure. The build
+  exports `IMGUI_USE_WCHAR32` through the CMake target so supplementary-plane
+  characters survive InputText; consumers must rebuild with the same definition.
+
+### Queue and recovery policy
+
+The mutex-protected ring has **256 fixed slots**, with no per-event allocation.
+Acceptance order is FIFO, with an internal monotonic sequence number assigned
+under the mutex. Only **adjacent unconsumed MouseMove events** coalesce; clicks,
+wheel, keys, text, source changes, focus, and snapshots are barriers. Optional
+source sequence numbers reject values not greater than the last accepted value
+(`Stale`); there is no transport, session, or network sequencing protocol.
+
+`Enqueue()` returns `Accepted`, `Coalesced`, `Full`, `Invalid`, `Stale`, or
+`Closed`. A full queue never evicts a reliable event or silently drops a release.
+**The producer must retry `Full` (including key/button ups), or explicitly cancel
+input using `ReleaseAllInput()`**. Rejected events do not advance sequencing.
+
+Handoff to ImGui is bounded to 64 typed events per batch, and waits for ImGui's
+previous batch to drain. Otherwise ImGui's trickling queue could grow without
+bound despite the bounded producer ring. Two isolated pinned-ImGui-internal
+operations inspect pending events and place a resize reprojection before them;
+all input generation uses Add*Event APIs. Trickling remains enabled to preserve
+quick down/up clicks. A worst-case text batch has at most 64×256 codepoints.
+
+Ordered `Focus(false)` and `ReleaseAll` synthesize releases for every key,
+button, and aggregate modifier. Focus loss ends the batch so a subsequent gain
+cannot cancel the defensive release. Downs/text/wheel/movement are ignored
+while unfocused; `Focus(true)` or a focused snapshot restores input acceptance.
+`ReleaseAll{false}` releases controls without changing focus.
+
+The separate **`ReleaseAllInput()` cancellation barrier is always available**
+while open, including saturation. It explicitly cancels older producer input
+and ImGui's deferred backlog, then synthesizes all releases and focus loss on
+the next render frame. Newer enqueues are retained until after that reset frame.
+This is the disconnect/controller-replacement escape hatch, not an automatic
+or silent overflow shortcut.
+
+Snapshots reconcile missing and stale keys/buttons, normalized position, and
+focus through transitions. Aggregate modifier flags are authoritative: false
+clears both physical sides; true preserves supplied sides or supplies the left
+side if none is given. An unfocused snapshot releases everything. Snapshots
+provide authoritative recovery after lost events; no timers/transmission exist.
+
+Tests exercise concurrent producers, FIFO/overflow/cancellation, transitions,
+UTF-8, resize during trickling, and real widgets/Canvas/View3D with stable root
+storage. The Desktop interaction test uses installed GLFW callbacks. No new
+camera controller, remote Canvas path, or rendering/presentation path exists.
+**Phase 5/networking, browser code, encoding, and PBO readback are not started.**
+
+References: pinned Dear ImGui [input event processing](https://github.com/ocornut/imgui/blob/v1.91.9b-docking/imgui.cpp),
+[GLFW backend](https://github.com/ocornut/imgui/blob/v1.91.9b-docking/backends/imgui_impl_glfw.cpp),
+and [Unicode configuration](https://github.com/ocornut/imgui/blob/v1.91.9b-docking/imconfig.h).
 
 ## Per-window frame flow
 

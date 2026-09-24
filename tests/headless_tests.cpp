@@ -105,8 +105,8 @@ void CheckRendering(render_module::Config config) {
         CHECK(glGetError() == GL_NO_ERROR);
         auto& io = ImGui::GetIO();
         io.IniFilename = nullptr;
-        CHECK(std::strcmp(io.BackendPlatformName, "render_module_headless_frame_metrics") == 0);
-        CHECK(io.BackendPlatformUserData == nullptr);
+        CHECK(std::strcmp(io.BackendPlatformName, "render_module_remote_input") == 0);
+        CHECK(io.BackendPlatformUserData != nullptr);
         CHECK(!(io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable));
         Target canvasTarget, viewTarget;
         int frames = 0, canvases = 0, views = 0;

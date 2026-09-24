@@ -20,6 +20,7 @@
 
 #include "platform/platform_backend.hpp"
 #include "input/input_backend.hpp"
+#include "input/input_access.hpp"
 #include "present/presenter.hpp"
 #include "present/image_presenter.hpp"
 #include "core/root_framebuffer.hpp"
@@ -576,6 +577,7 @@ void RenderModule::Run() {
         std::fprintf(stderr, "RenderModule::Run: could not make the graphics context current.\n");
         return;
     }
+    auto previousInputFrame = Clock::now() - std::chrono::milliseconds(16);
     while (!ctx.platform->ShouldClose()) {
         const auto frameStart = Clock::now();
         ctx.platform->PollEvents();
@@ -595,13 +597,14 @@ void RenderModule::Run() {
         if (ctx.headless) {
             ctx.virtualDisplay = display;
             ctx.pendingDisplay = {};
-            ctx.input->SetDisplaySize(display.width, display.height);
         }
         ctx.root->BeginFrame();
         glViewport(0, 0, display.width, display.height);
 
         ImGui_ImplOpenGL3_NewFrame();
-        ctx.input->NewFrame();
+        ctx.input->BeginFrame(ImGui::GetIO(), display.width, display.height,
+            std::chrono::duration<double>(frameStart - previousInputFrame).count());
+        previousInputFrame = frameStart;
         ImGui::NewFrame();
 
         if (settings.rootWindowDockingEnabled) 
@@ -732,6 +735,9 @@ bool RenderModule::SaveScreenshot(const std::string& path) {
 }
 
 namespace render_module::detail {
+std::shared_ptr<RemoteInputQueue> RemoteInputQueueHandle() {
+    return ctx.input ? ctx.input->EventQueue() : nullptr;
+}
 PresentedFrame CompletedFrame() { return ctx.root ? ctx.root->Frame() : PresentedFrame{}; }
 bool RequestVirtualDisplaySize(int width, int height) {
     if (!ctx.initialized || !ctx.headless || !ctx.platform->MakeCurrent() ||

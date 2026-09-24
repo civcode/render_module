@@ -177,6 +177,8 @@ target_sources(RenderModule PRIVATE
     src/pose_tool.cpp
     src/render_module.cpp
     src/core/root_framebuffer.cpp
+    src/input/remote_input_queue.cpp
+    src/input/remote_input_backend.cpp
     src/present/image_presenter.cpp
     src/platform/platform_backend.cpp
     src/view3d.cpp
@@ -208,6 +210,10 @@ if(RENDER_MODULE_ENABLE_HEADLESS)
     target_link_libraries(RenderModule PRIVATE OpenGL::EGL ${CMAKE_DL_LIBS})
 endif()
 
+find_package(Threads REQUIRED)
+target_link_libraries(RenderModule PRIVATE Threads::Threads)
+# Committed UTF-8 includes supplementary planes; clients must share ImGui's ABI.
+target_compile_definitions(RenderModule PUBLIC IMGUI_USE_WCHAR32)
 target_compile_features(RenderModule PUBLIC cxx_std_17)
 target_include_directories(RenderModule
     PUBLIC
@@ -314,6 +320,16 @@ endif()
 
 if(RENDER_MODULE_BUILD_TESTS)
     enable_testing()
+    add_executable(RenderModuleInputTests tests/input_tests.cpp)
+    target_include_directories(RenderModuleInputTests PRIVATE src)
+    target_link_libraries(RenderModuleInputTests PRIVATE RenderModule::RenderModule Threads::Threads)
+    foreach(test queue events)
+        add_test(NAME input_${test} COMMAND RenderModuleInputTests ${test})
+        set_tests_properties(input_${test} PROPERTIES TIMEOUT 30 LABELS "input;headless")
+    endforeach()
+    add_executable(RenderModuleInputIntegrationTests tests/input_integration_tests.cpp)
+    target_include_directories(RenderModuleInputIntegrationTests PRIVATE src)
+    target_link_libraries(RenderModuleInputIntegrationTests PRIVATE RenderModule::RenderModule Threads::Threads)
     add_executable(RenderModuleOutputTests tests/output_tests.cpp)
     target_include_directories(RenderModuleOutputTests PRIVATE src)
     target_link_libraries(RenderModuleOutputTests PRIVATE RenderModule::RenderModule)
@@ -329,6 +345,10 @@ if(RENDER_MODULE_BUILD_TESTS)
             target_compile_definitions(RenderModuleDesktopTests PRIVATE RENDER_MODULE_TEST_HEADLESS)
         endif()
 
+        target_compile_definitions(RenderModuleInputIntegrationTests PRIVATE RENDER_MODULE_TEST_DESKTOP)
+        target_link_libraries(RenderModuleInputIntegrationTests PRIVATE ${RENDER_MODULE_GLFW_TARGET})
+        add_test(NAME desktop_input COMMAND RenderModuleInputIntegrationTests desktop)
+        set_tests_properties(desktop_input PROPERTIES TIMEOUT 60)
         add_test(NAME root_framebuffer_desktop COMMAND RenderModuleOutputTests root desktop)
         set_tests_properties(root_framebuffer_desktop PROPERTIES TIMEOUT 30)
         add_test(NAME desktop_backend COMMAND RenderModuleDesktopTests --backend)
@@ -342,6 +362,12 @@ if(RENDER_MODULE_BUILD_TESTS)
         endif()
     endif()
     if(RENDER_MODULE_ENABLE_HEADLESS)
+        foreach(provider native glfw)
+            add_test(NAME headless_input_${provider}
+                COMMAND ${CMAKE_COMMAND} -E env --unset=DISPLAY --unset=WAYLAND_DISPLAY
+                    $<TARGET_FILE:RenderModuleInputIntegrationTests> ${provider})
+            set_tests_properties(headless_input_${provider} PROPERTIES TIMEOUT 60 LABELS headless)
+        endforeach()
         foreach(test root resize visual)
             add_test(NAME headless_output_${test}
                 COMMAND ${CMAKE_COMMAND} -E env --unset=DISPLAY --unset=WAYLAND_DISPLAY

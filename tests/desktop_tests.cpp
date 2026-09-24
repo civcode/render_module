@@ -103,7 +103,7 @@ void CheckBackend() {
     const auto framebuffer = platform->GetFramebufferSize();
     CHECK(logical.width == 400 && logical.height == 300);
     CHECK(framebuffer.width > 0 && framebuffer.height > 0);
-    input->NewFrame();
+    input->BeginFrame(io, framebuffer.width, framebuffer.height, 1.0/60.0);
     CHECK(io.DisplaySize.x == logical.width && io.DisplaySize.y == logical.height);
     CHECK(std::abs(io.DisplayFramebufferScale.x -
         float(framebuffer.width)/logical.width) < 0.001f);
@@ -123,14 +123,14 @@ void CheckBackend() {
     io.AddFocusEvent(true);
     keyCallback(window, GLFW_KEY_A, 0, GLFW_PRESS, 0);
     mouseCallback(window, GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS, 0);
-    input->NewFrame();
+    input->BeginFrame(io, framebuffer.width, framebuffer.height, 1.0/60.0);
     ImGui::NewFrame();
     CHECK(ImGui::IsKeyDown(ImGuiKey_A));
     CHECK(ImGui::IsMouseDown(ImGuiMouseButton_Left));
     ImGui::EndFrame();
     keyCallback(window, GLFW_KEY_A, 0, GLFW_RELEASE, 0);
     mouseCallback(window, GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE, 0);
-    input->NewFrame();
+    input->BeginFrame(io, framebuffer.width, framebuffer.height, 1.0/60.0);
     ImGui::NewFrame();
     CHECK(!ImGui::IsKeyDown(ImGuiKey_A));
     CHECK(!ImGui::IsMouseDown(ImGuiMouseButton_Left));

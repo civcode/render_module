@@ -5,10 +5,10 @@
 namespace render_module::detail {
 namespace {
 
-class GlfwImGuiInput final : public IInputBackend {
+class GlfwInputBackend final : public IInputBackend {
 public:
-    explicit GlfwImGuiInput(GLFWwindow* window) : window_(window) {}
-    ~GlfwImGuiInput() override { Shutdown(); }
+    explicit GlfwInputBackend(GLFWwindow* window) : window_(window) {}
+    ~GlfwInputBackend() override { Shutdown(); }
 
     bool Init() override {
         if (!initialized_ && window_)
@@ -16,7 +16,7 @@ public:
         return initialized_;
     }
 
-    void NewFrame() override {
+    void BeginFrame(ImGuiIO&, int, int, double) override {
         if (initialized_) ImGui_ImplGlfw_NewFrame();
     }
 
@@ -34,7 +34,7 @@ private:
 } // namespace
 
 std::unique_ptr<IInputBackend> CreateGlfwImGuiInput(GLFWwindow* window) {
-    return std::make_unique<GlfwImGuiInput>(window);
+    return std::make_unique<GlfwInputBackend>(window);
 }
 
 } // namespace render_module::detail

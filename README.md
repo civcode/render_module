@@ -13,8 +13,8 @@ The 3D layer is intentionally integrated into RenderModule instead of owning a s
 ## Build
 
 Requires CMake 3.16+, a C/C++17 toolchain, and OpenGL development files. GLFW is
-fetched at **3.5.1**; older system GLFW installations are not used. Corrade and
-Magnum and NanoVG are pinned to tested commits. GLAD, ImGui, ImPlot, and fonts are
+fetched at **3.5.1**; older system GLFW installations are not used. Corrade,
+Magnum, and NanoVG are pinned to tested commits. GLAD, ImGui, ImPlot, and fonts are
 also fetched, so the first configure requires network access.
 
 Linux Desktop builds additionally need X11/Wayland development packages (the
@@ -42,6 +42,11 @@ cmake --install build --prefix "$HOME/.local"
 ~~~
 
 To omit examples, configure with `-DRENDER_MODULE_BUILD_EXAMPLES=OFF`.
+
+ImGui now uses `IMGUI_USE_WCHAR32` for complete committed UTF-8 input, including
+supplementary Unicode planes. **Rebuild dependent applications**: this affects
+ImGui's ABI. Linking the `RenderModule::RenderModule` CMake target propagates the
+definition automatically; non-CMake consumers must also define it when compiling.
 
 ## Linux headless rendering and screenshots
 
@@ -101,9 +106,16 @@ PNG images are top-origin; the sole output flip occurs immediately after GL
 readback. The small public-domain writer is reused from the existing NanoVG
 source tree; see [third_party/PNG_NOTICE.md](third_party/PNG_NOTICE.md).
 
-Remote input, browser functionality, encoding/streaming, async PBO readback, and
-OSMesa are not implemented. No window-system events close a headless run
-automatically; use `RequestClose()` or the demo's `--frames` option.
+Headless mode uses a private, browser-independent `RemoteInputBackend`, with a
+256-slot thread-safe typed event queue. It feeds ImGui's Add*Event APIs for mouse,
+keys/modifiers, committed UTF-8, focus, and state recovery. There is no public
+remote protocol: see [ARCHITECTURE.md](ARCHITECTURE.md#input-backends-phase-4)
+for enqueue results, coalescing, release-all, and snapshot semantics.
+
+Browser functionality, networking, encoding/streaming, async PBO readback, and
+OSMesa are not implemented. Phase 5 has not started. No window-system events
+close a headless run automatically; use `RequestClose()` or the demo's `--frames`
+option.
 
 ### Regression tests
 
@@ -131,6 +143,16 @@ failure artifacts. The Desktop test compares root output against the old direct
 ImGui rendering path (≤1 RGB code value), plus blit orientation/letterboxing.
 The `desktop_no_display` test verifies that the legacy overload still fails
 cleanly without a display.
+
+`input_queue` and `input_events` need neither a graphics context nor a display.
+They cover concurrent producers, saturation, sequencing/coalescing, UTF-8,
+modifiers, focus/release-all, snapshots, retained handles during shutdown, and
+resize while ImGui is still processing input. `headless_input_native` and
+`headless_input_glfw` verify real button clicks, InputText editing, Ctrl+A,
+Canvas input, and View3D orbit/pan/zoom from worker-thread injection.
+`desktop_input` exercises the same application behavior through GLFW's installed
+callbacks. Input does not recreate root framebuffer storage; Phase 3 golden and
+Desktop blit/parity tests remain unchanged.
 
 Tested on Mesa 25.2.8 llvmpipe (LLVM 20.1.2), GL 4.5 Core / GLSL 4.50 / EGL 1.5:
 GLFW Null + Mesa surfaceless display + pbuffer; native EGL device 0 (software)

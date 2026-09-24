@@ -84,7 +84,7 @@ public:
     PlatformSize GetWindowSize() const override { return size_; }
     PlatformSize GetFramebufferSize() const override { return size_; }
     std::unique_ptr<IInputBackend> CreateInputBackend() override {
-        return window_ ? CreateHeadlessFrameInput(size_) : nullptr;
+        return window_ ? CreateHeadlessInput() : nullptr;
     }
     std::unique_ptr<IPresenter> CreatePresenter() override {
         return window_ ? CreateHeadlessPresenter() : nullptr;
