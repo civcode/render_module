@@ -19,6 +19,8 @@ public:
     explicit ImagePresenter(std::string path = {}) : path_(std::move(path)) {}
     bool Present(const PresentedFrame& frame) override;
     static bool Read(const PresentedFrame& frame, ImageRgba& image);
+    // Caller-owned reusable storage, same one-flip/top-down and GL-state policy.
+    static bool ReadInto(const PresentedFrame& frame, unsigned char* data, std::size_t capacity, int stride);
     static bool WritePng(const std::string& path, const ImageRgba& image);
 private:
     std::string path_;

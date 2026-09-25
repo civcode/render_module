@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+project(RenderModuleInstalledVideoSmoke LANGUAGES CXX)
+find_package(RenderModule CONFIG REQUIRED)
+add_executable(InstalledCoreSmoke main.cpp)
+target_link_libraries(InstalledCoreSmoke PRIVATE RenderModule::RenderModule)
+add_executable(InstalledVideoSmoke main.cpp)
+target_compile_definitions(InstalledVideoSmoke PRIVATE INSTALLED_VIDEO)
+target_link_libraries(InstalledVideoSmoke PRIVATE RenderModule::RenderModule RenderModule::Video)

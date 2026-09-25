@@ -27,6 +27,9 @@
 #include "present/web_presenter.hpp"
 #endif
 #include "core/root_framebuffer.hpp"
+#ifdef RENDER_MODULE_ENABLE_VIDEO
+#include "video/video_capture.hpp"
+#endif
 #include "core/framebuffer_state.hpp"
 #include "core/render_output.hpp"
 #include "canvas_internal.hpp"
@@ -67,6 +70,9 @@ struct AppContext {
     std::unique_ptr<render_module::detail::IPlatformBackend> platform;
     std::unique_ptr<render_module::detail::IInputBackend> input;
     std::unique_ptr<render_module::detail::IPresenter> presenter;
+#ifdef RENDER_MODULE_ENABLE_VIDEO
+    std::unique_ptr<render_module::detail::VideoCapture> video;
+#endif
     std::unique_ptr<render_module::detail::RootFramebuffer> root;
     render_module::detail::PlatformSize virtualDisplay;
     render_module::detail::PlatformSize pendingDisplay;
@@ -648,6 +654,12 @@ void RenderModule::Run() {
             break;
         }
 
+#ifdef RENDER_MODULE_ENABLE_VIDEO
+        if (ctx.video && !ctx.video->Submit(frame)) {
+            std::fprintf(stderr, "RenderModule: video output failed; detaching video (rendering continues).\n");
+            ctx.video.reset();
+        }
+#endif
         if (ctx.fpsSetpoint > 0.0)         {
             const auto framePeriod = std::chrono::duration<double>(1.0/ctx.fpsSetpoint);
             std::this_thread::sleep_until(frameStart + 
@@ -681,6 +693,9 @@ void RenderModule::Shutdown() {
         return;
     }
     Console().SetCoutRedirect(false);
+#ifdef RENDER_MODULE_ENABLE_VIDEO
+    ctx.video.reset();
+#endif
     ctx.presenter.reset();
     ctx.root.reset();
     for (PaintWindow& window : ctx.paintWindows) DestroyFBO(window);
@@ -738,6 +753,16 @@ double RenderModule::GetDeltaTime() {
 
 bool RenderModule::IsInitialized() {
     return ctx.initialized;
+}
+
+bool RenderModule::SetVideoOutput(std::shared_ptr<render_module::video::VideoPipeline> pipeline) {
+#ifdef RENDER_MODULE_ENABLE_VIDEO
+    if (!ctx.initialized) return false;
+    ctx.video = pipeline ? std::make_unique<render_module::detail::VideoCapture>(std::move(pipeline)) : nullptr;
+    return true;
+#else
+    (void)pipeline; return false;
+#endif
 }
 
 bool RenderModule::SaveScreenshot(const std::string& path) {

@@ -270,8 +270,43 @@ release-all cancellation barrier; no alternate ImGui or camera path is introduce
 
 See [WEB_PROTOCOL.md](WEB_PROTOCOL.md) for protocol v1, explicit bounds, security,
 viewport negotiation, input details, diagnostics and test coverage. **JPEG/WS is
-a temporary development transport**, replaceable by WebRTC in Phase 7. Phase 6,
-video encoders, PBOs, hardware encoding and DataChannels are not implemented.
+a temporary development transport**, replaceable by WebRTC in Phase 7. Phase 6
+software video is independent of this transport. PBOs, hardware encoding and
+DataChannels are not implemented.
+
+## Software realtime video (Phase 6)
+
+```text
+RootFramebuffer → CPU Frame Capture (render thread; synchronous, one flip)
+                      /                         \
+                 JPEG prototype            owned RGBA VideoFrame
+                                                    ↓ latest slot
+                                             VideoConverter (worker)
+                                                    ↓ I420 / BT.709 limited
+                                               IVideoEncoder
+                                                    ↓ OpenH264Encoder
+                                          EncodedFrame / H.264 Annex-B
+                                                    ↓
+                                          [future Phase 7 transport]
+```
+
+`RenderModule::Video` is a separate optional CPU-only library. Its public header
+contains no GL, ImGui, OpenH264, libyuv or Web types. Only `OpenH264Encoder` knows
+codec types. `VideoCapture` bridges the core's completed frame into a four-slot
+CPU pool using `ImagePresenter::ReadInto()`, then transfers immutable ownership.
+The worker converts into reusable I420 storage, encodes synchronously and publishes
+one access unit including SPS/PPS. The framebuffer generation follows every frame.
+
+One pending raw frame is replaceable; one encoded output slot applies backpressure.
+Dependent P access units are not arbitrarily dropped. Resolution commands invalidate
+old pending/output data and suppress old in-flight completion before recreating the
+codec and producing an IDR. All GL remains on the render thread; shutdown needs no
+GL context on the worker. JPEG's transport/presenter remains unchanged; when both
+outputs are active, their synchronous readbacks currently remain separate.
+
+See [VIDEO_PIPELINE.md](VIDEO_PIPELINE.md) for precise color/framing/timebase,
+configuration, ownership/drop and control contracts. **Phase 7/WebRTC has not
+started**; H.264 bytes are not sent through WebSocket or any media transport.
 
 ## Per-window frame flow
 

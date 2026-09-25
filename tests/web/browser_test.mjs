@@ -160,6 +160,9 @@ try {
         averageReadbackEncodeMicros: (end.encodeMicros-start.encodeMicros)/(end.jpegEncoded-start.jpegEncoded),
         metrics: end, syntheticIME: true};
     assert.equal((await state()).glError, 0); assert.deepEqual(pageErrors, [], 'no uncaught browser errors');
+    if (process.env.RENDER_MODULE_TEST_VIDEO) {
+        const video = await state(); assert.ok(video.videoEncoded > 30); assert.equal(video.videoErrors, 0);
+    }
     await fs.writeFile(path.join(artifact, 'metrics.json'), JSON.stringify(report, null, 2));
     await page.screenshot({path: path.join(artifact, 'browser.png')});
     await fs.writeFile(path.join(artifact, 'console.json'), JSON.stringify(browserErrors, null, 2));

@@ -1,4 +1,7 @@
 #include "render_module/render_module.hpp"
+#ifdef VIDEO_COEXISTENCE_TEST
+#include "render_module/video.hpp"
+#endif
 #include <boost/json.hpp>
 #include <glad/glad.h>
 #include <csignal>
@@ -16,6 +19,13 @@ int main(int argc, char** argv) {
     config.web.authToken = "0123456789abcdef0123456789abcdef";
     if (!RenderModule::Init(config)) return 2;
     ImGui::GetIO().IniFilename = nullptr;
+#ifdef VIDEO_COEXISTENCE_TEST
+    std::shared_ptr<render_module::video::VideoPipeline> video;
+    if (std::getenv("RENDER_MODULE_TEST_VIDEO")) {
+        video = std::make_shared<render_module::video::VideoPipeline>();
+        if (!RenderModule::SetVideoOutput(video)) return 3;
+    }
+#endif
     int frame = 0, clicks = 0, generation = 0; GLint oldRoot = 0;
     char text[1024] = {}; ImVec2 button{}, edit{}, viewCenter{}, canvasCenter{};
     RenderModule::RegisterImGuiCallback([&] {
@@ -49,6 +59,14 @@ int main(int argc, char** argv) {
             {"edit", {edit.x, edit.y}}, {"view", {viewCenter.x, viewCenter.y}}, {"canvas", {canvasCenter.x, canvasCenter.y}},
             {"camera", {p.x,p.y,p.z}}, {"keyHeld", ImGui::IsKeyDown(ImGuiKey_A)}, {"ctrl", io.KeyCtrl},
             {"mouseHeld", ImGui::IsMouseDown(0)}, {"glError", glGetError()}};
+#ifdef VIDEO_COEXISTENCE_TEST
+        if (video) {
+            render_module::video::EncodedFrame encoded;
+            video->TryReceive(encoded); // Test-only sink; H.264 never enters WebSocket.
+            const auto metrics = video->Metrics();
+            state["videoEncoded"] = metrics.framesEncoded; state["videoErrors"] = metrics.errors;
+        }
+#endif
         const std::string path = argv[1], temp = path + ".tmp";
         { std::ofstream file(temp); file << boost::json::serialize(state); }
         std::rename(temp.c_str(), path.c_str());

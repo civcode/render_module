@@ -1,8 +1,10 @@
 # Phase 5 Web backend — protocol v1
 
 **TEMPORARY DEVELOPMENT TRANSPORT.** JPEG/WebSocket frames prove remote UI
-interaction. WebRTC replaces frame delivery in **Phase 7**. Phase 6 video
-encoders, DataChannels, asynchronous PBOs and hardware encoding are not present.
+interaction. WebRTC replaces frame delivery in **Phase 7**, which has not started.
+[Phase 6 software video](VIDEO_PIPELINE.md) is a separate optional output; this
+JPEG protocol is unchanged. DataChannels, asynchronous PBOs and hardware encoding
+are not present.
 
 ## Dependencies and packaging
 
@@ -222,7 +224,8 @@ A two-second fixture observation at 1000×696: **19.97 JPEG fps**, **30.96% of o
 CPU core** for the server/renderer process, **2.05 ms** average synchronous
 readback/encode/pack. This is a diagnostic sample, not a general performance
 benchmark; browser CPU is excluded and fixture state-file reporting is included.
-NVIDIA hardware, Firefox and real OS IME remain unverified. Phase 6 was not started.
+NVIDIA hardware, Firefox and real OS IME remain unverified. These counts describe
+the Phase 5 checkpoint; Phase 6 validation is documented separately.
 
 References: [Beast async server example](https://github.com/boostorg/beast/blob/boost-1.83.0/example/websocket/server/async/websocket_server_async.cpp),
 [write ownership](https://www.boost.org/doc/libs/1_83_0/libs/beast/doc/html/beast/ref/boost__beast__websocket__stream/async_write.html),

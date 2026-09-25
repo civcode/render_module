@@ -31,7 +31,14 @@ bool ImagePresenter::Read(const PresentedFrame& frame, ImageRgba& image) {
     next.height = frame.height;
     try { next.pixels.resize(bytes); }
     catch (const std::bad_alloc&) { return false; }
+    if (!ReadInto(frame, next.pixels.data(), next.pixels.size(), frame.width*4)) return false;
+    image = std::move(next); return true;
+}
 
+bool ImagePresenter::ReadInto(const PresentedFrame& frame, unsigned char* data, std::size_t capacity, int stride) {
+    std::size_t bytes = 0;
+    if (!frame.IsValid() || !ImageSize(frame.width,frame.height,bytes) || !data ||
+        stride < frame.width*4 || stride%4 || std::uint64_t(stride)*frame.height > capacity) return false;
     GLint read = 0, buffer = 0, packBuffer = 0;
     GLint alignment = 0, rowLength = 0, skipRows = 0, skipPixels = 0;
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read);
@@ -46,10 +53,10 @@ bool ImagePresenter::Read(const PresentedFrame& frame, ImageRgba& image) {
     // Never interpret the CPU pointer as a caller's pixel-pack-buffer offset.
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_PACK_ROW_LENGTH, stride/4);
     glPixelStorei(GL_PACK_SKIP_ROWS, 0);
     glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
-    glReadPixels(0, 0, frame.width, frame.height, GL_RGBA, GL_UNSIGNED_BYTE, next.pixels.data());
+    glReadPixels(0, 0, frame.width, frame.height, GL_RGBA, GL_UNSIGNED_BYTE, data);
     const GLenum error = glGetError();
     glReadBuffer(buffer);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, read);
@@ -65,13 +72,11 @@ bool ImagePresenter::Read(const PresentedFrame& frame, ImageRgba& image) {
 
     // The ONE output flip: GL bottom-origin -> CPU image top-origin.
     // PNG writing and Desktop blitting perform no further orientation changes.
-    const std::size_t stride = static_cast<std::size_t>(frame.width) * 4;
     for (int y = 0; y < frame.height/2; ++y) {
-        auto first = next.pixels.begin() + y*stride;
-        auto last = next.pixels.begin() + (frame.height - 1 - y)*stride;
-        std::swap_ranges(first, first + stride, last);
+        auto first = data + std::size_t(y)*stride;
+        auto last = data + std::size_t(frame.height - 1 - y)*stride;
+        std::swap_ranges(first, first + frame.width*4, last);
     }
-    image = std::move(next);
     return true;
 }
 

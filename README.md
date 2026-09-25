@@ -119,8 +119,8 @@ or the demo's `--frames` option. OSMesa and async PBO readback are not implement
 
 **Temporary development transport: JPEG over WebSocket, not production video.**
 Web reuses the headless context, root framebuffer and Phase 4 input queue. No
-Desktop window is created. Phase 6/video encoding has not started; WebRTC replaces
-this transport in Phase 7.
+Desktop window is created. Optional Phase 6 software video is separate; WebRTC
+replaces this transport in Phase 7, which has not started.
 
 Install system Boost >=1.75 (System/JSON development packages) and libjpeg
 development files; tested with Boost 1.83 and libjpeg-turbo 2.1.5. Then:
@@ -174,6 +174,21 @@ clipboard and synthetic CJK composition, viewer isolation, rapid resize, blur an
 reconnect with held keys. It records a screenshot/log/state and FPS/CPU/encoding
 observations under `build-web/test-artifacts/web/`. Real OS IME and Firefox are
 not covered. Web C++/helper tests do not require Playwright.
+
+## Optional software H.264 video (Phase 6)
+
+Enable `RENDER_MODULE_ENABLE_VIDEO=ON` and `RENDER_MODULE_ENABLE_OPENH264=ON`
+for pinned OpenH264 2.6.0 + libyuv 1972. The separate `RenderModule::Video` target
+provides owned frames, explicit BT.709 limited-range I420 conversion, an encoder
+interface and a bounded worker pipeline. `RenderModule::SetVideoOutput()` attaches
+synchronous root capture; CPU consumers receive H.264 **Annex-B access units**.
+No transport is attached. JPEG/WebSocket continues working independently.
+
+See [VIDEO_PIPELINE.md](VIDEO_PIPELINE.md) for build/API examples, immutable pins,
+pixel order/orientation, timestamps, keyframes, bitrate/resolution changes,
+ownership/backpressure, tests and benchmarks. NASM enables optimized x86 OpenH264;
+FFmpeg is optional independent-decoder **test tooling only**. Phase 7/WebRTC,
+hardware encoders and asynchronous PBOs are not implemented.
 
 ### Regression tests
 

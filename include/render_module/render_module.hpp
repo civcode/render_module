@@ -2,6 +2,7 @@
 #define RENDER_MODULE_HPP_
 
 #include <functional>
+#include <memory>
 #include <vector>
 #include <string>
 
@@ -18,6 +19,7 @@
 #include "render_module/debug_console.hpp"
 
 struct NVGcontext;
+namespace render_module::video { class VideoPipeline; }
 
 static ImGuiID GetRootDockspaceID();
 
@@ -49,6 +51,9 @@ public:
     // Diagnostic synchronous capture of the last completed UI frame. Call on the
     // render thread, after Run() returns and before Shutdown(); false if no frame.
     static bool SaveScreenshot(const std::string& path);
+    // Optional CPU video output. Render thread, after Init; nullptr detaches.
+    // Use a fresh pipeline per Init. No transport is connected by this method.
+    static bool SetVideoOutput(std::shared_ptr<render_module::video::VideoPipeline> pipeline);
     static void RequestClose();
     static void Shutdown();
     static render_module::Vec2 GetWindowSize();
