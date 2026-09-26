@@ -119,8 +119,8 @@ or the demo's `--frames` option. OSMesa and async PBO readback are not implement
 
 **Temporary development transport: JPEG over WebSocket, not production video.**
 Web reuses the headless context, root framebuffer and Phase 4 input queue. No
-Desktop window is created. Optional Phase 6 software video is separate; WebRTC
-replaces this transport in Phase 7, which has not started.
+Desktop window is created. JPEG remains an explicit diagnostic mode. Optional
+[Phase 7 WebRTC](WEBRTC.md) provides H.264 video while retaining WebSocket input.
 
 Install system Boost >=1.75 (System/JSON development packages) and libjpeg
 development files; tested with Boost 1.83 and libjpeg-turbo 2.1.5. Then:
@@ -187,8 +187,23 @@ No transport is attached. JPEG/WebSocket continues working independently.
 See [VIDEO_PIPELINE.md](VIDEO_PIPELINE.md) for build/API examples, immutable pins,
 pixel order/orientation, timestamps, keyframes, bitrate/resolution changes,
 ownership/backpressure, tests and benchmarks. NASM enables optimized x86 OpenH264;
-FFmpeg is optional independent-decoder **test tooling only**. Phase 7/WebRTC,
-hardware encoders and asynchronous PBOs are not implemented.
+FFmpeg is optional independent-decoder **test tooling only**. Hardware encoders
+and asynchronous PBOs are not implemented.
+
+## Optional WebRTC H.264 video (Phase 7)
+
+Enable `RENDER_MODULE_ENABLE_WEBRTC=ON` together with WEB, VIDEO and OPENH264.
+This adds pinned libdatachannel 0.24.5, libnice ICE and OpenSSL DTLS; CMake >=3.21
+and libnice/OpenSSL development packages are required. Select
+`config.web.transport = WebTransport::WebRtc` or the 3D demo's
+`--web-transport webrtc`. JPEG remains the default/explicit diagnostic fallback.
+
+The embedded browser decodes H.264 in a real video element. One software encoder
+serves multiple independent WebRTC peers; resize, controller/input/Unicode and
+reconnect retain the earlier architecture. UDP/TCP TURN relay paths are tested;
+**TURN/TLS is rejected** because this libnice backend does not implement real TLS.
+See [WEBRTC.md](WEBRTC.md) for negotiation, bounds, pins, measurements, browser/loss
+coverage and deployment recipes. **Phase 8/DataChannel input has not started.**
 
 ### Regression tests
 

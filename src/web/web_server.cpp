@@ -1,4 +1,7 @@
 #include "web_server.hpp"
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+#include "webrtc/webrtc_session.hpp"
+#endif
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
 #include <boost/json.hpp>
@@ -44,7 +47,7 @@ void Headers(http::response<http::string_body>& response) {
     response.set("X-Content-Type-Options", "nosniff");
     response.set("Referrer-Policy", "no-referrer");
     response.set("X-Frame-Options", "DENY");
-    response.set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    response.set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     response.set(http::field::cache_control, "no-store");
 }
 } // namespace
@@ -54,6 +57,10 @@ struct WebServer::Impl {
     WebServer& owner;
     WebConfig config;
     std::shared_ptr<RemoteInputQueue> input;
+    std::shared_ptr<video::VideoPipeline> video;
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+    std::unique_ptr<EncodedFrameHub> hub;
+#endif
     net::io_context io{1};
     tcp::acceptor acceptor{io};
     net::steady_timer timer{io}, shutdownTimer{io};
@@ -67,8 +74,8 @@ struct WebServer::Impl {
     bool resizePending = false;
     std::shared_ptr<const std::vector<unsigned char>> latest;
     std::uint64_t latestId = 0;
-    Impl(WebServer& owner_, WebConfig config_, std::shared_ptr<RemoteInputQueue> input_)
-        : owner(owner_), config(std::move(config_)), input(std::move(input_)) {}
+    Impl(WebServer& owner_, WebConfig config_, std::shared_ptr<RemoteInputQueue> input_, std::shared_ptr<video::VideoPipeline> video_)
+        : owner(owner_), config(std::move(config_)), input(std::move(input_)), video(std::move(video_)) {}
     void Accept();
     void Tick();
     void Elect();
@@ -96,18 +103,50 @@ struct WebServer::Impl {
     std::string Metrics() {
         auto& c = owner.counters;
         WebSize size; { std::lock_guard<std::mutex> lock(mailbox); size = actual; }
-        return Json({{"version", RENDER_MODULE_WEB_VERSION}, {"build", RENDER_MODULE_WEB_BUILD_ID},
+        boost::json::object result{{"version", RENDER_MODULE_WEB_VERSION}, {"build", RENDER_MODULE_WEB_BUILD_ID},
             {"protocol", WebProtocolVersion}, {"backend", "web-jpeg-prototype"},
             {"sessions", c.sessions.load()}, {"controller", c.controller.load()}, {"framesRendered", c.rendered.load()},
             {"jpegEncoded", c.encoded.load()}, {"jpegDropped", c.dropped.load()}, {"bytesTransmitted", c.bytes.load()},
             {"inputAccepted", c.accepted.load()}, {"inputRejected", c.rejected.load()}, {"inputQueueFull", c.full.load()},
-            {"encodeMicros", c.encodeMicros.load()}, {"width", size.width}, {"height", size.height}});
+            {"encodeMicros", c.encodeMicros.load()}, {"width", size.width}, {"height", size.height}};
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+        if(hub) {
+            result["backend"]="web-webrtc";
+            boost::json::array clients; unsigned connected=0;
+            std::uint64_t packets=0,bytes=0,nacks=0,retransmits=0,plis=0,submitted=0,rejected=0,dropped=0;
+            for(const auto& s:hub->Snapshot()) {
+                const auto& m=*s.counters; connected+=s.connected;
+                packets+=m.packets; bytes+=m.bytes; nacks+=m.nacks; retransmits+=m.retransmits; plis+=m.plis;
+                submitted+=m.submitted; rejected+=m.rejected; dropped+=m.testDropped;
+                clients.push_back({{"session",s.id},{"ssrc",s.ssrc},{"ice_state",s.iceState},{"ice_candidate_type",s.candidateType},
+                    {"pending",s.pending},{"rtp_packets_sent",m.packets.load()},{"rtp_bytes_sent",m.bytes.load()},
+                    {"rtcp_nacks",m.nacks.load()},{"rtp_retransmits",m.retransmits.load()},{"rtcp_plis",m.plis.load()},
+                    {"latest_remb_bps",m.rembBps.load()},{"remb_time_ms",m.rembTimeMs.load()},
+                    {"video_frames_submitted",m.submitted.load()},{"video_frames_rejected",m.rejected.load()}});
+            }
+            result["webrtc_sessions"]=clients.size(); result["webrtc_connected"]=connected; result["webrtc_failed"]=hub->Failures();
+            result["rtp_packets_sent"]=packets; result["rtp_bytes_sent"]=bytes; result["rtcp_nacks"]=nacks;
+            result["rtp_retransmits"]=retransmits; result["rtcp_plis"]=plis; result["video_frames_submitted"]=submitted;
+            result["video_frames_rejected_per_client"]=rejected; result["test_packets_dropped"]=dropped;
+            result["webrtc_clients"]=std::move(clients);
+            const auto e=hub->EncoderMetrics();
+            result["encoder"]={{"frames",e.framesEncoded},{"dropped",e.framesDropped},{"errors",e.errors},
+                {"readback_ms",e.readback.MeanMs()},{"conversion_ms",e.rgbaToI420.MeanMs()},{"encode_ms",e.encode.MeanMs()},
+                {"pending",e.encoderQueueDepth},{"output",e.outputQueueDepth}};
+        }
+#endif
+        return Json(std::move(result));
     }
 };
 struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
     Impl& server;
     websocket::stream<beast::tcp_stream> ws;
-    beast::flat_buffer buffer{WebMessageLimit + 16384};
+    beast::flat_buffer buffer;
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+    std::shared_ptr<WebRtcSession> media;
+#endif
+    Clock::time_point connectedAt=Clock::now();
+    unsigned signalingMessages=0;
     http::request_parser<http::string_body> parser;
     http::response<http::string_body> response;
     std::string id;
@@ -121,7 +160,8 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
     WebSize observed;
     Clock::time_point ackDeadline{}, writeDeadline{}, rateStart = Clock::now();
     unsigned messages = 0;
-    Session(Impl& s, tcp::socket socket) : server(s), ws(std::move(socket)), id(RandomId()) {
+    Session(Impl& s, tcp::socket socket) : server(s), ws(std::move(socket)),
+        buffer((s.config.transport==WebTransport::WebRtc?WebSignalingLimit:WebMessageLimit)+16384), id(RandomId()) {
         parser.header_limit(8192); parser.body_limit(WebMessageLimit);
         state.input.focused = false;
     }
@@ -158,12 +198,13 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
             // Count pending upgrades too; no parallel handshakes can bypass the cap.
             ready = true; ++server.owner.counters.sessions;
             beast::get_lowest_layer(ws).expires_never();
-            ws.read_message_max(WebMessageLimit);
+            ws.read_message_max(server.config.transport==WebTransport::WebRtc?WebSignalingLimit:WebMessageLimit);
             ws.set_option(websocket::stream_base::timeout{std::chrono::seconds(3), std::chrono::seconds(15), true});
             ws.async_accept(req, [self=shared_from_this()](beast::error_code error) {
                 if (error) { self->Finish(); return; }
                 self->server.Elect();
-                self->Control(Json({{"type", "welcome"}, {"session", self->id}, {"control", self->server.controller == self.get()}}));
+                self->Control(Json({{"type", "welcome"}, {"session", self->id}, {"control", self->server.controller == self.get()},
+                    {"transport",self->server.config.transport==WebTransport::WebRtc?"webrtc":"jpeg"}}));
                 self->Read();
             });
             return;
@@ -228,7 +269,7 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
             if (error) { self->Finish(); return; }
             if (self->dead || self->closeRequested) return;
             const auto now = Clock::now();
-            if (now - self->rateStart >= std::chrono::seconds(1)) { self->messages = 0; self->rateStart = now; }
+            if (now - self->rateStart >= std::chrono::seconds(1)) { self->messages = 0; self->signalingMessages=0; self->rateStart = now; }
             if (!self->ws.got_text() || ++self->messages > 1000) { self->Reject(); return; }
             const auto text = beast::buffers_to_string(self->buffer.data());
             self->buffer.consume(self->buffer.size());
@@ -237,7 +278,9 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
                 self->Reject(); return;
             }
             self->sequence = message.sequence;
-            if (message.kind == WebMessage::Kind::FrameAck) {
+            if (message.kind >= WebMessage::Kind::RtcHello) {
+                if(++self->signalingMessages>128 || message.session!=self->id || !self->Signal(message)) { self->Reject(); return; }
+            } else if (message.kind == WebMessage::Kind::FrameAck) {
                 if (!self->awaitingAck || message.frameId != self->sentId) { self->Reject(); return; }
                 self->awaitingAck = false; self->Write();
             } else if (self->server.controller != self.get()) {
@@ -246,6 +289,46 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
             } else self->Input(message);
             if (!self->dead && !self->closeRequested) self->Read();
         });
+    }
+    bool Signal(const WebMessage& message) {
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+        if(!server.hub) return false;
+        try {
+            if(message.kind==WebMessage::Kind::RtcHello) {
+                if(media) return false;
+                boost::json::array ice;
+                for(const auto& s:server.config.iceServers) ice.push_back({{"urls",s.urls},{"username",s.username},{"credential",s.credential}});
+                Control(Json({{"type","hello"},{"session",id},{"iceServers",std::move(ice)},
+                    {"iceTransportPolicy",server.config.iceRelayOnly?"relay":"all"}}));
+                media=server.hub->Create(id); return bool(media);
+            }
+            if(!media) return false;
+            if(message.kind==WebMessage::Kind::RtcAnswer) return media->SetRemoteDescription(message.sdp);
+            if(message.kind==WebMessage::Kind::RtcCandidate) return media->AddRemoteCandidate(message.candidate,message.mid);
+            if(message.kind==WebMessage::Kind::RtcComplete) return media->RemoteIceComplete();
+        } catch(...) { Control(Json({{"type","error"},{"session",id},{"code","negotiation_failed"}})); }
+#else
+        (void)message;
+#endif
+        return false;
+    }
+    void MediaTick() {
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+        if(!server.hub) return;
+        if(!media) { if(Clock::now()-connectedAt>std::chrono::seconds(10)) Close(); return; }
+        if(!media->Healthy()) {
+            Control(Json({{"type","error"},{"session",id},{"code","media_failed"}})); Close(); return;
+        }
+        RtcSignal signal;
+        // Bound the WS control queue even if all interfaces finish ICE together.
+        while(controls.size()<8 && media->Poll(signal)) {
+            boost::json::object out{{"type",signal.type},{"session",id}};
+            if(signal.type=="offer") out["sdp"]=signal.text;
+            else if(signal.type=="ice-candidate") { out["candidate"]=signal.text; out["mid"]=signal.mid; }
+            else if(signal.type=="webrtc-state") out["state"]=signal.text;
+            Control(Json(std::move(out)));
+        }
+#endif
     }
     void Input(const WebMessage& message) {
         auto& c = server.owner.counters;
@@ -278,6 +361,9 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
     void Close() {
         if (dead || closeRequested) return;
         closeRequested = true;
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+        if(server.hub) server.hub->Remove(id); media.reset();
+#endif
         if (server.controller == this) { server.Relinquish(this); server.Elect(); }
         pending.reset(); controls.clear(); Write();
         if (!ready) Finish();
@@ -285,6 +371,9 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
     void Finish() {
         if (dead) return;
         dead = true;
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+        if(server.hub) server.hub->Remove(id); media.reset();
+#endif
         beast::error_code error;
         beast::get_lowest_layer(ws).socket().shutdown(tcp::socket::shutdown_both, error);
         beast::get_lowest_layer(ws).socket().close(error);
@@ -341,17 +430,26 @@ void WebServer::Impl::Tick() {
                 s->observed = size;
                 s->Control(Json({{"type", "viewport_accepted"}, {"width", size.width}, {"height", size.height}}));
             }
+            s->MediaTick();
             if (packet) s->Offer(packet, id);
         }
         Tick();
     });
 }
-WebServer::WebServer(WebConfig config, std::shared_ptr<RemoteInputQueue> input)
-    : impl_(std::make_unique<Impl>(*this, std::move(config), std::move(input))) {}
+WebServer::WebServer(WebConfig config, std::shared_ptr<RemoteInputQueue> input, std::shared_ptr<video::VideoPipeline> video)
+    : impl_(std::make_unique<Impl>(*this, std::move(config), std::move(input), std::move(video))) {}
 WebServer::~WebServer() { Stop(); }
 bool WebServer::Start() {
     auto& s = *impl_; auto& c = s.config;
     try {
+        if(c.transport==WebTransport::WebRtc) {
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+            if(!s.video || !ValidateIceConfiguration(c)) return false;
+            s.hub=std::make_unique<EncodedFrameHub>(s.video,c);
+#else
+            return false;
+#endif
+        } else if(c.transport!=WebTransport::JpegWebSocket) return false;
         const auto address = net::ip::make_address(c.bindAddress);
         if (!s.input || c.maxClients < 1 || c.maxClients > 32 || c.maxWidth < 1 || c.maxHeight < 1 ||
             c.maxWidth > 2048 || c.maxHeight > 2048 || c.jpegQuality < 1 || c.jpegQuality > 100 ||
@@ -410,7 +508,7 @@ void WebServer::ObserveViewport(WebSize size) {
     std::lock_guard<std::mutex> lock(impl_->mailbox); impl_->actual = size;
 }
 void WebServer::Publish(std::shared_ptr<const std::vector<unsigned char>> packet, std::uint64_t id) {
-    if (!packet || packet->size() > WebFrameLimit+28) return;
+    if (impl_->config.transport != WebTransport::JpegWebSocket || !packet || packet->size() > WebFrameLimit+28) return;
     std::lock_guard<std::mutex> lock(impl_->mailbox);
     if (id <= impl_->latestId) return;
     if (impl_->latest) ++counters.dropped;

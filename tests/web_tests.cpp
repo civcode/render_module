@@ -5,6 +5,9 @@
 #include "present/image_presenter.hpp"
 #include "present/web_presenter.hpp"
 #include "input/input_access.hpp"
+#ifdef WEBRTC_TEST
+#include "render_module/video.hpp"
+#endif
 #include <boost/asio.hpp>
 #include <boost/beast.hpp>
 #include <boost/json.hpp>
@@ -153,6 +156,48 @@ void ServerTests() {
     server.Stop(); CHECK(server.counters.sessions == 0);
     CHECK(std::chrono::steady_clock::now()-stopStart < std::chrono::seconds(2));
 }
+#ifdef WEBRTC_TEST
+void SignalingTests() {
+    auto queue=std::make_shared<RemoteInputQueue>();
+    auto pipeline=std::make_shared<render_module::video::VideoPipeline>(); CHECK(pipeline->Configure({}));
+    WebConfig config; config.port=0; config.authToken=token; config.transport=render_module::WebTransport::WebRtc;
+    WebServer server(config,queue,pipeline); CHECK(server.Start()); const auto port=server.Port();
+    { Client bad; CHECK(!bad.Connect(port,false)); CHECK(bad.response.result_int()==401); }
+    { Client bad; CHECK(!bad.Connect(port,true,false)); CHECK(bad.response.result_int()==403); }
+    Client owner; CHECK(owner.Connect(port)); const auto welcome=owner.Until("welcome");
+    CHECK(welcome.at("transport")=="webrtc"); const auto ownerId=welcome.at("session");
+    owner.Send({{"type","hello"},{"session",ownerId}});owner.Until("hello");owner.Until("offer");
+    CHECK(queue->TakeReleaseAll());owner.Send(KeyMessage(true));Wait([&]{return queue->Size()==1;});
+    for(int mode=0;mode<11;++mode) {
+        Client bad; CHECK(bad.Connect(port)); const auto id=bad.Until("welcome").at("session");
+        if(mode==0) bad.Send({{"type","hello"},{"session",ownerId}}); // Wrong socket ownership.
+        else if(mode==1) bad.Send({{"type","answer"},{"session",id},{"sdp","invalid"}});
+        else if(mode==2) bad.Raw(std::string(WebSignalingLimit+1,'x'));
+        else if(mode==3) bad.Send({{"type","text"},{"text",std::string(WebMessageLimit,'x')}});
+        else {
+            bad.Send({{"type","hello"},{"session",id}});bad.Until("hello");bad.Until("offer");
+            if(mode==4) bad.Send({{"type","hello"},{"session",id}});
+            if(mode==5) bad.Send({{"type","answer"},{"session",id},{"sdp","invalid"}});
+            if(mode==6) bad.Send({{"type","ice-candidate"},{"session",id},{"candidate",""},{"mid","video"}});
+            if(mode==7) bad.Send({{"type","ice-candidate"},{"session",id},{"candidate",std::string(1025,'x')},{"mid","video"}});
+            if(mode==8) {bad.Send({{"type","ice-complete"},{"session",id}});bad.Send({{"type","ice-complete"},{"session",id}});}
+            if(mode==9) {bad.Send({{"type","ice-complete"},{"session",id}});bad.Send({{"type","ice-candidate"},{"session",id},
+                {"candidate","candidate:1 1 UDP 1 127.0.0.1 50000 typ host"},{"mid","video"}});}
+            if(mode==10) for(int n=0;n<65;++n) bad.Send({{"type","ice-candidate"},{"session",id},
+                {"candidate","candidate:1 1 UDP 1 127.0.0.1 50000 typ host"},{"mid","video"}});
+        }
+        bad.Closed();Wait([&]{return server.counters.sessions==1;});
+        CHECK(queue->Size()==1); // Bad viewer cannot clear the controller's input.
+    }
+    owner.Close();Wait([&]{return server.counters.sessions==0;});CHECK(queue->TakeReleaseAll());
+    Client reconnect;CHECK(reconnect.Connect(port));const auto next=reconnect.Until("welcome");CHECK(next.at("session")!=ownerId);
+    reconnect.Send({{"type","hello"},{"session",ownerId}});reconnect.Closed();
+    Client slow;CHECK(slow.Connect(port));const auto id=slow.Until("welcome").at("session");
+    slow.Send({{"type","hello"},{"session",id}});slow.Until("offer");
+    const auto start=std::chrono::steady_clock::now();server.Stop();
+    CHECK(std::chrono::steady_clock::now()-start<std::chrono::seconds(2));CHECK(server.counters.sessions==0);
+}
+#endif
 void ProtocolTests() {
     WebConfig config; WebInputState state; WebMessage result;
     CHECK(ParseWebMessage(R"({"v":1,"seq":1,"type":"text","text":"äöüÄÖÜß 日本 🙂"})", config, state, result));
@@ -167,6 +212,17 @@ void ProtocolTests() {
     auto size = ClampWebViewport(4000, 1000, config); CHECK(size.width == 1920 && size.height == 480);
     CHECK(ClampWebViewport(0, 100, config).width == 0);
     CHECK(ClampWebViewport(20000, 100, config).width == 0);
+    auto signal=boost::json::object{{"v",1},{"seq",1},{"type","hello"},{"session",std::string(32,'a')}};
+    CHECK(!ParseWebMessage(boost::json::serialize(signal),config,state,result));
+    config.transport=render_module::WebTransport::WebRtc;
+    CHECK(ClampWebViewport(1,1,config).width==16 && ClampWebViewport(1,1,config).height==16);
+    CHECK(ClampWebViewport(1279,719,config).width==1278 && ClampWebViewport(1279,719,config).height==718);
+    CHECK(ParseWebMessage(boost::json::serialize(signal),config,state,result));
+    signal["v"]=2;CHECK(!ParseWebMessage(boost::json::serialize(signal),config,state,result));signal["v"]=1;
+    signal["type"]="offer";CHECK(!ParseWebMessage(boost::json::serialize(signal),config,state,result));
+    signal["type"]="answer";signal["sdp"]=std::string(32769,'a');CHECK(!ParseWebMessage(boost::json::serialize(signal),config,state,result));
+    signal["sdp"]="valid-size";CHECK(ParseWebMessage(boost::json::serialize(signal),config,state,result));
+    signal["session"]=std::string(32,'G');CHECK(!ParseWebMessage(boost::json::serialize(signal),config,state,result));
     const unsigned char bytes[] = {1,2,3}; auto packet = PackJpeg(0x0102030405060708ULL, 640, 480, bytes, 3);
     CHECK(packet.size() == 31 && packet[8] == 1 && packet[15] == 8 && packet[24] == 0 && packet[27] == 3);
     CHECK(PackJpeg(0, 640, 480, bytes, 3).empty());
@@ -210,7 +266,11 @@ int main(int argc, char** argv) {
     try {
         CHECK(argc == 2);
         if (std::strcmp(argv[1], "server") == 0) ServerTests();
-        else if (std::strcmp(argv[1], "protocol") == 0) ProtocolTests(); else JpegTests();
+        else if (std::strcmp(argv[1], "protocol") == 0) ProtocolTests();
+#ifdef WEBRTC_TEST
+        else if (std::strcmp(argv[1], "signaling") == 0) SignalingTests();
+#endif
+        else JpegTests();
         std::cout << "Web tests passed.\n"; return 0;
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; RenderModule::Shutdown(); return 1; }
 }

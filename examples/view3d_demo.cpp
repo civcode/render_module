@@ -31,6 +31,8 @@ int main(int argc, char** argv) {
             config.backend = render_module::Backend::Headless;
         else if (option == "--render-backend" && value == "web")
             config.backend = render_module::Backend::Web;
+        else if (option == "--web-transport" && value == "webrtc") config.web.transport = render_module::WebTransport::WebRtc;
+        else if (option == "--web-transport" && value == "jpeg") config.web.transport = render_module::WebTransport::JpegWebSocket;
         else if (option == "--web-bind" && !value.empty()) config.web.bindAddress = value;
         else if (option == "--web-origin" && !value.empty()) config.web.allowedOrigins.emplace_back(value);
         else if (option == "--web-port" && !value.empty()) {
@@ -54,7 +56,7 @@ int main(int argc, char** argv) {
         } else {
             std::fprintf(stderr, "Usage: %s [--render-backend desktop|headless|web] "
                 "[--headless-context glfw-null-egl|native-egl] [--frames N] [--screenshot output.png] "
-                "[--web-bind 127.0.0.1] [--web-port 8080] [--web-origin http://host:port]\n", argv[0]);
+                "[--web-transport jpeg|webrtc] [--web-bind 127.0.0.1] [--web-port 8080] [--web-origin http://host:port]\n", argv[0]);
             return 1;
         }
     }

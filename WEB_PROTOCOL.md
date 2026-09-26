@@ -1,10 +1,9 @@
-# Phase 5 Web backend — protocol v1
+# Web backend — protocol v1
 
-**TEMPORARY DEVELOPMENT TRANSPORT.** JPEG/WebSocket frames prove remote UI
-interaction. WebRTC replaces frame delivery in **Phase 7**, which has not started.
-[Phase 6 software video](VIDEO_PIPELINE.md) is a separate optional output; this
-JPEG protocol is unchanged. DataChannels, asynchronous PBOs and hardware encoding
-are not present.
+JPEG/WebSocket remains the explicit **diagnostic transport**. Optional [Phase 7
+WebRTC](WEBRTC.md) replaces media delivery only: authentication, controller/input
+and viewport handling below are shared. The JPEG binary protocol is unchanged.
+DataChannels, asynchronous PBOs and hardware encoding are not present.
 
 ## Dependencies and packaging
 
@@ -145,6 +144,44 @@ never spins: it invokes Phase 4 emergency release-all and reports `input_reset`.
 The client clears local held state and requires fresh focus. Accepted earlier
 input may be explicitly canceled during this recovery; large text commits are
 not transactional and should be retried by the user if recovery is reported.
+
+## WebRTC signaling (Phase 7)
+
+`welcome` adds `transport: "jpeg" | "webrtc"`. In WebRTC mode there are no JPEG
+binary frames or frame ACKs. The same authenticated, Origin-validated `/api/ws`
+connection carries signaling; there is no unauthenticated signaling endpoint.
+Every signaling message has `v:1`, `type`, and the owning 32-hex `session` ID.
+Client messages additionally use the same increasing `seq` as input. Viewers may
+negotiate their own media but may not send input/resize or target another session.
+
+| Type | Direction | Fields/action |
+|---|---|---|
+| `hello` | client → server | Starts one negotiation per session |
+| `hello` | server → client | `iceServers` (urls/username/credential), `iceTransportPolicy` (`all`/`relay`) |
+| `offer` | server → client only | `sdp`: one send-only H.264 video track |
+| `answer` | client → server | `sdp`: validated recv-only H.264 answer, once |
+| `ice-candidate` | either | `candidate`, `mid:"video"`; trickle ICE |
+| `ice-complete` | either | No further candidates in that direction |
+| `webrtc-state` | server → client | `state`: New/Checking/Connected/Completed/Disconnected/Failed/Closed |
+| `error` | server → client | Credential-free `code`, e.g. `negotiation_failed` or `media_failed`; session closes |
+
+Signaling envelopes <=64 KiB; SDP <=32 KiB; candidate <=1024 bytes. Input still
+has the 8 KiB limit. At most 128 signaling messages/second, within the existing
+1000-message total; 64 remote candidates/session, <=96 queued media signals and
+<=16 WS controls. Early candidates wait for the answer. Duplicate hello/answer/
+completion, stale sequence/session, unsupported SDP, wrong media direction/type,
+malformed/oversized messages and overflow close only that session. Server-offer
+mode rejects client offers and extra audio/application m-lines.
+
+Client starts hello within 10 seconds; negotiation must become ready within 15.
+Browser empty-string/null ICE completion events are normalized to one message.
+libdatachannel 0.24.5 has no remote end-of-candidates API: the server records the
+validated completion and rejects later candidates, without inventing a library
+call. Terminal media failure also closes the WS and releases controller/input.
+Reconnect obtains a fresh peer, SSRC, session and lease; ordinary resize does not
+renegotiate. Browser signaling promises and ICE queues are bounded and scoped to
+the current connection. No ordinary logs contain signaling bodies or credentials.
+See [WEBRTC.md](WEBRTC.md) for receive-level negotiation and RTP/feedback details.
 
 ## Browser mapping and resize
 

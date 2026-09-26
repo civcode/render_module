@@ -92,7 +92,7 @@ RootFramebuffer (RGBA8)
 Presenter
     ├ DesktopPresenter → blit to default framebuffer → swap
     ├ ImagePresenter   → optional synchronous readback → PNG
-    └ WebPresenter     → synchronous readback → JPEG → WebSocket (Phase 5)
+    └ WebPresenter     → synchronous readback → JPEG/WS (diagnostic) or VideoPipeline/WebRTC
 ```
 
 `src/core/root_framebuffer.*` owns a single-sample `GL_RGBA8` color texture/FBO,
@@ -270,8 +270,8 @@ release-all cancellation barrier; no alternate ImGui or camera path is introduce
 
 See [WEB_PROTOCOL.md](WEB_PROTOCOL.md) for protocol v1, explicit bounds, security,
 viewport negotiation, input details, diagnostics and test coverage. **JPEG/WS is
-a temporary development transport**, replaceable by WebRTC in Phase 7. Phase 6
-software video is independent of this transport. PBOs, hardware encoding and
+an explicit diagnostic transport**; Phase 7 adds optional WebRTC media. Phase 6
+software video remains transport-independent. PBOs, hardware encoding and
 DataChannels are not implemented.
 
 ## Software realtime video (Phase 6)
@@ -287,7 +287,7 @@ RootFramebuffer → CPU Frame Capture (render thread; synchronous, one flip)
                                                     ↓ OpenH264Encoder
                                           EncodedFrame / H.264 Annex-B
                                                     ↓
-                                          [future Phase 7 transport]
+                                          Phase 7 WebRTC adapter (optional)
 ```
 
 `RenderModule::Video` is a separate optional CPU-only library. Its public header
@@ -305,8 +305,30 @@ GL context on the worker. JPEG's transport/presenter remains unchanged; when bot
 outputs are active, their synchronous readbacks currently remain separate.
 
 See [VIDEO_PIPELINE.md](VIDEO_PIPELINE.md) for precise color/framing/timebase,
-configuration, ownership/drop and control contracts. **Phase 7/WebRTC has not
-started**; H.264 bytes are not sent through WebSocket or any media transport.
+configuration, ownership/drop and control contracts. H.264 bytes are never sent
+through WebSocket.
+
+## WebRTC media (Phase 7)
+
+`WebPresenter` selects either JPEG or an owned Phase 6 pipeline/capture bridge.
+A CPU fanout worker drains complete access units, copies each once to release the
+encoder pool, then shares immutable storage across sessions. Every session owns a
+PeerConnection, send-only H.264 track, packetizer, SSRC, RTP clock/sequence, bounded
+NACK history and RTCP state. One active/one pending AU per independent sender worker
+isolates slow viewers; dropped dependency chains wait for a fresh IDR. Ready/PLI
+requests share one coalescing `VideoStreamController`. REMB is observation only;
+no unbounded pacing queue is introduced.
+
+The existing authenticated WebSocket carries bounded versioned offer/answer/ICE
+signaling and all Phase 5 input/viewport messages. Signaling and close are serialized
+on its I/O thread; library callbacks use weak ownership and bounded event queues.
+Media failure/disconnect tears down that session and invokes existing controller
+release-all recovery. Render/GL ownership and Phase 6 public interfaces are unchanged.
+
+The browser's video dimensions drive image/input mapping; root resize changes the
+in-band SPS/PPS/IDR without renegotiating a healthy peer. Dependencies and the two
+libnice caveats (relay-policy build patch, unsupported TURN/TLS) are documented in
+[WEBRTC.md](WEBRTC.md). **Phase 8/DataChannel input has not started.**
 
 ## Per-window frame flow
 

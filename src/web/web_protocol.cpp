@@ -69,12 +69,16 @@ void Position(const Object& o, InputStateSnapshot& state) {
 WebSize ClampWebViewport(int w, int h, const WebConfig& config) {
     if (w < 1 || h < 1 || w > 16384 || h > 16384) return {};
     const double scale = std::min({1.0, double(config.maxWidth)/w, double(config.maxHeight)/h});
-    return {std::max(1, int(std::floor(w*scale))), std::max(1, int(std::floor(h*scale)))};
+    WebSize size{std::max(1, int(std::floor(w*scale))), std::max(1, int(std::floor(h*scale)))};
+    if(config.transport==WebTransport::WebRtc) {
+        size.width=std::max(16,size.width&~1); size.height=std::max(16,size.height&~1);
+    }
+    return size;
 }
 bool ParseWebMessage(std::string_view text, const WebConfig& config,
                      const WebInputState& previous, WebMessage& result) {
     try {
-        Require(text.size() <= WebMessageLimit);
+        Require(text.size() <= (config.transport == WebTransport::WebRtc ? WebSignalingLimit : WebMessageLimit));
         boost::json::parse_options options; options.max_depth = 8;
         auto value = boost::json::parse(text, {}, options);
         const auto& o = value.as_object();
@@ -84,7 +88,21 @@ bool ParseWebMessage(std::string_view text, const WebConfig& config,
         Require(next.sequence > 0 && next.sequence <= 9007199254740991ULL);
         const auto type = String(o.at("type"));
         auto& s = next.state.input;
-        if (type == "frame_ack") {
+        const bool signaling = type=="hello" || type=="answer" || type=="ice-candidate" || type=="ice-complete";
+        Require(signaling || text.size()<=WebMessageLimit);
+        if (signaling) {
+            Require(config.transport==WebTransport::WebRtc);
+            next.session=String(o.at("session"));
+            Require(next.session.size()==32 && next.session.find_first_not_of("0123456789abcdef")==std::string::npos);
+            if(type=="hello") next.kind=WebMessage::Kind::RtcHello;
+            else if(type=="answer") {
+                next.kind=WebMessage::Kind::RtcAnswer; next.sdp=String(o.at("sdp"));
+                Require(!next.sdp.empty() && next.sdp.size()<=32768 && next.sdp.find('\0')==std::string::npos);
+            } else if(type=="ice-candidate") {
+                next.kind=WebMessage::Kind::RtcCandidate; next.candidate=String(o.at("candidate")); next.mid=String(o.at("mid"));
+                Require(!next.candidate.empty() && next.candidate.size()<=1024 && next.mid=="video");
+            } else next.kind=WebMessage::Kind::RtcComplete;
+        } else if (type == "frame_ack") {
             next.kind = WebMessage::Kind::FrameAck;
             const auto& frame = o.at("frameId");
             if (frame.is_string()) {

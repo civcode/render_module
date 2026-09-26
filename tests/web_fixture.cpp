@@ -2,6 +2,9 @@
 #ifdef VIDEO_COEXISTENCE_TEST
 #include "render_module/video.hpp"
 #endif
+#ifdef WEBRTC_TEST
+#include "webrtc/webrtc_session.hpp"
+#endif
 #include <boost/json.hpp>
 #include <glad/glad.h>
 #include <csignal>
@@ -17,6 +20,20 @@ int main(int argc, char** argv) {
     config.headlessContext = render_module::HeadlessContext::NativeEgl;
     config.width = 640; config.height = 480; config.fps = 30; config.web.port = 0;
     config.web.authToken = "0123456789abcdef0123456789abcdef";
+#if defined(WEBRTC_TEST) || defined(INSTALLED_WEBRTC_TEST)
+    if(std::getenv("RENDER_MODULE_TEST_WEBRTC")) {
+        config.web.transport=render_module::WebTransport::WebRtc;
+#ifdef WEBRTC_TEST
+        if(std::getenv("RENDER_MODULE_TEST_SLOW_VIEWER")) render_module::detail::SetWebRtcTestSlowViewer(400);
+        if(const auto* loss=std::getenv("RENDER_MODULE_TEST_LOSS")) render_module::detail::SetWebRtcTestPacketLoss(unsigned(std::atoi(loss)));
+#endif
+        if(const auto* url=std::getenv("RENDER_MODULE_TEST_TURN")) {
+            const auto* user=std::getenv("RENDER_MODULE_TEST_TURN_USER"); const auto* pass=std::getenv("RENDER_MODULE_TEST_TURN_PASSWORD");
+            if(!user || !pass) return 4;
+            config.web.iceServers.push_back({url,user,pass}); config.web.iceRelayOnly=true;
+        }
+    }
+#endif
     if (!RenderModule::Init(config)) return 2;
     ImGui::GetIO().IniFilename = nullptr;
 #ifdef VIDEO_COEXISTENCE_TEST

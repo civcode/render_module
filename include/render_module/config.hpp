@@ -18,8 +18,18 @@ struct NativeEglConfig {
     bool forcePbuffer = false;
 };
 
-// TEMPORARY DEVELOPMENT TRANSPORT: JPEG over WebSocket, not realtime video.
+enum class WebTransport { JpegWebSocket, WebRtc };
+struct IceServer {
+    std::string urls; // One stun: or turn: URI; no embedded credentials. libnice turns: is rejected.
+    std::string username;
+    std::string credential;
+};
 struct WebConfig {
+    // Explicit opt-in preserves existing diagnostic deployments. Input stays on WebSocket.
+    WebTransport transport = WebTransport::JpegWebSocket;
+    std::vector<IceServer> iceServers; // Empty: directly routed LAN, no external service.
+    bool iceRelayOnly = false;
+    bool iceTcp = false;
     std::string bindAddress = "127.0.0.1";
     std::uint16_t port = 8080;
     // 16–128 URL-safe ASCII characters. Never printed. Use TLS outside loopback.

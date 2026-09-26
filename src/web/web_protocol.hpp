@@ -8,6 +8,7 @@
 namespace render_module::detail {
 constexpr unsigned WebProtocolVersion = 1;
 constexpr std::size_t WebMessageLimit = 8192;
+constexpr std::size_t WebSignalingLimit = 65536;
 constexpr std::size_t WebFrameLimit = 16*1024*1024;
 struct WebSize { int width = 0, height = 0; };
 struct WebInputState {
@@ -15,7 +16,8 @@ struct WebInputState {
     std::optional<RemoteMouseSource> source;
 };
 struct WebMessage {
-    enum class Kind { Input, Release, Viewport, FrameAck } kind = Kind::Input;
+    enum class Kind { Input, Release, Viewport, FrameAck, RtcHello, RtcAnswer, RtcCandidate, RtcComplete } kind = Kind::Input;
+    std::string session, sdp, candidate, mid;
     std::uint64_t sequence = 0, frameId = 0;
     WebSize viewport;
     WebInputState state;

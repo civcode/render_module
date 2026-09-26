@@ -3,23 +3,47 @@
 #include "core/render_output.hpp"
 #include "web/web_server.hpp"
 #include "web/jpeg_encode.h"
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+#include "video/video_capture.hpp"
+#endif
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 
 namespace render_module::detail {
 namespace {
+std::shared_ptr<video::VideoPipeline> MakeWebVideo(const Config& config) {
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+    if(config.web.transport==WebTransport::WebRtc) {
+        auto pipeline=std::make_shared<video::VideoPipeline>();
+        video::EncoderConfig c; c.fps=config.web.fps;
+        if(!video::NormalizeSize(config.width,config.height,c.width,c.height) || !pipeline->Configure(c)) return {};
+        return pipeline;
+    }
+#else
+    (void)config;
+#endif
+    return {};
+}
 class WebPresenter final : public IPresenter {
 public:
     WebPresenter(const Config& config, std::shared_ptr<RemoteInputQueue> input)
-        : server_(config.web, std::move(input)), quality_(config.web.jpegQuality), fps_(config.web.fps) {}
+        : pipeline_(MakeWebVideo(config)), server_(config.web, std::move(input), pipeline_),
+          transport_(config.web.transport), quality_(config.web.jpegQuality), fps_(config.web.fps) {
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+        if(pipeline_) capture_=std::make_unique<VideoCapture>(pipeline_);
+#endif
+    }
     bool Start(const Config& config) {
+        if(transport_==WebTransport::WebRtc && (config.width<16 || config.height<16 ||
+           (config.width&1) || (config.height&1))) return false;
         if (config.width > config.web.maxWidth || config.height > config.web.maxHeight || !server_.Start()) return false;
         server_.ObserveViewport({config.width, config.height});
         const std::string host = config.web.bindAddress.find(':') == std::string::npos ?
             config.web.bindAddress : "[" + config.web.bindAddress + "]";
-        std::fprintf(stderr, "RenderModule Web backend (TEMPORARY JPEG/WebSocket transport)\n"
+        std::fprintf(stderr, "RenderModule Web backend (%s; input over WebSocket)\n"
             "  Size : %dx%d\n  HTTP : http://%s:%u/\n  Auth : %s\n",
+            transport_==WebTransport::WebRtc?"WebRTC H.264":"TEMPORARY JPEG/WebSocket",
             config.width, config.height, host.c_str(), server_.Port(),
             config.web.authToken.empty() ? "disabled" : "enabled");
         return true;
@@ -37,6 +61,9 @@ public:
         const auto period = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0/fps_));
         nextEncode_ += period;
         if (nextEncode_ <= now) nextEncode_ = now + period; // Fixed cadence, no catch-up bursts.
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+        if(transport_==WebTransport::WebRtc) return capture_ && capture_->Submit(frame);
+#endif
         ImageRgba image;
         if (!ImagePresenter::Read(frame, image)) return false; // Reuses the sole Phase 3 output flip.
         unsigned char* bytes = nullptr; unsigned long size = 0;
@@ -52,7 +79,12 @@ public:
     }
 private:
     using Clock = std::chrono::steady_clock;
+    std::shared_ptr<video::VideoPipeline> pipeline_;
     WebServer server_;
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+    std::unique_ptr<VideoCapture> capture_;
+#endif
+    WebTransport transport_;
     int quality_;
     double fps_;
     Clock::time_point nextEncode_{};

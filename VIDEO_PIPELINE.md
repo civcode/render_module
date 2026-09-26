@@ -1,9 +1,9 @@
 # Phase 6 — software realtime video
 
-**Transport boundary: owned H.264 access units, not networking. Phase 7 has not
-started.** JPEG/WebSocket remains the Phase 5 diagnostic transport unchanged.
-No WebRTC, RTP, libdatachannel, browser video element, PBO, hardware encoder or
-congestion controller is implemented.
+**Transport boundary: owned H.264 access units, not networking.** The optional
+[Phase 7 adapter](WEBRTC.md) consumes this unchanged interface for WebRTC media.
+JPEG/WebSocket remains the explicit diagnostic transport. PBOs, hardware encoders
+and congestion adaptation are not implemented.
 
 ```text
 RootFramebuffer → synchronous CPU Frame Capture (render thread, one flip)
@@ -16,7 +16,7 @@ RootFramebuffer → synchronous CPU Frame Capture (render thread, one flip)
                                                     ↓ OpenH264Encoder
                                             EncodedFrame (Annex-B)
                                                     ↓
-                                            [future Phase 7 transport]
+                                            [optional Phase 7 WebRTC adapter]
 ```
 
 ## Build and dependencies
@@ -289,8 +289,8 @@ env -u DISPLAY -u WAYLAND_DISPLAY render_module/build/phase6-clean-consumer/Inst
 env -u DISPLAY -u WAYLAND_DISPLAY render_module/build/phase6-clean-consumer/InstalledVideoSmoke
 ```
 
-No Phase 7 implementation is present. No tests require NVIDIA hardware; hardware
-encoders and cross-platform/cross-compiled OpenH264 remain outside this phase.
+No tests require NVIDIA hardware; hardware encoders and cross-platform/cross-compiled
+OpenH264 remain outside this phase. Phase 7 transport verification is in [WEBRTC.md](WEBRTC.md).
 
 Primary references: [OpenH264 2.6 API](https://github.com/cisco/openh264/blob/v2.6.0/codec/api/wels/codec_api.h),
 [encoder parameters/VUI](https://github.com/cisco/openh264/blob/v2.6.0/codec/api/wels/codec_app_def.h),

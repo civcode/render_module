@@ -4,6 +4,7 @@
 #include <atomic>
 #include <memory>
 
+namespace render_module::video { class VideoPipeline; }
 namespace render_module::detail {
 struct WebCounters {
     std::atomic<unsigned> sessions{0};
@@ -14,7 +15,8 @@ struct WebCounters {
 // No server-library types, GL handles, or ImGui objects cross this boundary.
 class WebServer {
 public:
-    WebServer(WebConfig config, std::shared_ptr<RemoteInputQueue> input);
+    WebServer(WebConfig config, std::shared_ptr<RemoteInputQueue> input,
+              std::shared_ptr<video::VideoPipeline> video = {});
     ~WebServer();
     bool Start();
     void Stop();
