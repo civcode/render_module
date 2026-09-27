@@ -13,7 +13,7 @@ out of installed RenderModule headers. Original license texts are installed unde
 
 The commit pins the submodule objects. libjuice and nlohmann/json submodules are
 not used. Upstream examples, tests and WebSockets are disabled. usrsctp is an
-upstream link dependency; RenderModule Phase 7 creates no DataChannels.
+upstream link dependency; RenderModule Phase 8 uses it for WebRTC DataChannels.
 
 RenderModule modifies libdatachannel's `src/impl/icetransport.cpp` to map relay-only
 policy to libnice's `force-relay` property. `cmake/LibDataChannelNiceRelay.cmake`

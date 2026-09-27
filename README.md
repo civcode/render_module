@@ -120,7 +120,8 @@ or the demo's `--frames` option. OSMesa and async PBO readback are not implement
 **Temporary development transport: JPEG over WebSocket, not production video.**
 Web reuses the headless context, root framebuffer and Phase 4 input queue. No
 Desktop window is created. JPEG remains an explicit diagnostic mode. Optional
-[Phase 7 WebRTC](WEBRTC.md) provides H.264 video while retaining WebSocket input.
+[WebRTC](WEBRTC.md) provides H.264 video with [Phase 8 DataChannel input](INPUT_PROTOCOL.md).
+JPEG mode retains WebSocket input.
 
 Install system Boost >=1.75 (System/JSON development packages) and libjpeg
 development files; tested with Boost 1.83 and libjpeg-turbo 2.1.5. Then:
@@ -190,7 +191,7 @@ ownership/backpressure, tests and benchmarks. NASM enables optimized x86 OpenH26
 FFmpeg is optional independent-decoder **test tooling only**. Hardware encoders
 and asynchronous PBOs are not implemented.
 
-## Optional WebRTC H.264 video (Phase 7)
+## Optional WebRTC H.264 video and DataChannel input (Phases 7–8)
 
 Enable `RENDER_MODULE_ENABLE_WEBRTC=ON` together with WEB, VIDEO and OPENH264.
 This adds pinned libdatachannel 0.24.5, libnice ICE and OpenSSL DTLS; CMake >=3.21
@@ -203,7 +204,9 @@ serves multiple independent WebRTC peers; resize, controller/input/Unicode and
 reconnect retain the earlier architecture. UDP/TCP TURN relay paths are tested;
 **TURN/TLS is rejected** because this libnice backend does not implement real TLS.
 See [WEBRTC.md](WEBRTC.md) for negotiation, bounds, pins, measurements, browser/loss
-coverage and deployment recipes. **Phase 8/DataChannel input has not started.**
+coverage and deployment recipes. [INPUT_PROTOCOL.md](INPUT_PROTOCOL.md) documents
+Phase 8's binary input/control protocol, controller recovery and bounded queues.
+Production WebSocket is signaling-only. **Phase 9/PBO readback has not started.**
 
 ### Regression tests
 

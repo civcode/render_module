@@ -61,7 +61,7 @@ bool ValidateIceConfiguration(const WebConfig& c) {
     return !c.iceRelayOnly || turn;
 }
 bool ValidateRtcCandidate(const std::string& text,const std::string& mid) {
-    if(!Clean(text,WebRtcCandidateLimit) || mid!="video" || text.rfind("candidate:",0)) return false;
+    if(!Clean(text,WebRtcCandidateLimit) || (mid!="video" && mid!="0") || text.rfind("candidate:",0)) return false;
     try {
         std::istringstream fields(text); std::string foundation,protocol,host,typeWord,type;
         unsigned component=0,priority=0,port=0;
@@ -75,7 +75,10 @@ bool ValidateRtcAnswer(const std::string& sdp) {
     if(sdp.empty() || sdp.size()>WebRtcSdpLimit || sdp.find('\0')!=std::string::npos) return false;
     try {
         rtc::Description d(sdp,"answer");
-        if(d.hasApplication() || d.mediaCount()!=1 || !d.iceUfrag() || !d.icePwd() || !d.fingerprint()) return false;
+        if(!d.hasApplication() || d.mediaCount()!=2 || !d.iceUfrag() || !d.icePwd() || !d.fingerprint()) return false;
+        const auto* application=d.application();
+        if(!application || application->mid()!="0" || application->protocol()!="UDP/DTLS/SCTP" || application->isRemoved() ||
+           !application->sctpPort() || !*application->sctpPort()) return false;
         auto entry=d.media(0); auto p=std::get_if<rtc::Description::Media*>(&entry);
         if(!p || (*p)->type()!="video" || (*p)->mid()!="video" || (*p)->isRemoved() ||
            (*p)->direction()!=rtc::Description::Direction::RecvOnly) return false;
@@ -107,13 +110,17 @@ bool ValidateRtcAnswer(const std::string& sdp) {
             level=receiveLevel;
         }
         if(level<40 || (level!=40 && level!=41 && level!=42 && level!=50 && level!=51 && level!=52 && level!=60 && level!=61 && level!=62)) return false;
-        unsigned candidates=0; std::istringstream lines(sdp); std::string line;
+        unsigned candidates=0; bool bundled=false; std::istringstream lines(sdp); std::string line;
         while(std::getline(lines,line)) {
             if(!line.empty() && line.back()=='\r') line.pop_back();
             if(line.size()>WebRtcCandidateLimit*2) return false;
+            if(line.rfind("a=group:BUNDLE",0)==0) {
+                if(bundled || line!="a=group:BUNDLE video 0") return false;
+                bundled=true;
+            }
             if(line.rfind("a=candidate:",0)==0 && (++candidates>64 || !ValidateRtcCandidate(line.substr(2),"video"))) return false;
         }
-        return true;
+        return bundled;
     } catch(...) { return false; }
 }
 class VideoStreamController {
@@ -136,6 +143,12 @@ struct WebRtcSession::Impl : std::enable_shared_from_this<Impl> {
     std::shared_ptr<VideoStreamController> controller;
     std::shared_ptr<rtc::PeerConnection> pc;
     std::shared_ptr<rtc::Track> track;
+    std::shared_ptr<rtc::DataChannel> fast, control;
+    std::deque<dc::Packet> inputEvents;
+    std::optional<dc::Packet> latestMove;
+    std::uint32_t controlSequence=0;
+    Clock::time_point inputRateStart=Clock::now();
+    unsigned fastRate=0, controlRate=0;
     std::unique_ptr<RtpSender> sender;
     mutable std::mutex mutex;
     std::mutex closing;
@@ -207,8 +220,54 @@ struct WebRtcSession::Impl : std::enable_shared_from_this<Impl> {
             if(!self->stopped && !self->failed) { self->ready=true; self->controller->Request(); self->wake.notify_all(); }
         } });
         track->onError([weak](std::string) { if(auto self=weak.lock()) self->Fail(); });
+        pc->onDataChannel([weak](std::shared_ptr<rtc::DataChannel> unexpected) {
+            unexpected->close(); if(auto self=weak.lock()) self->Fail();
+        });
+        rtc::DataChannelInit fastInit; fastInit.protocol=dc::Subprotocol;
+        fastInit.reliability.unordered=true; fastInit.reliability.maxRetransmits=0;
+        rtc::DataChannelInit controlInit; controlInit.protocol=dc::Subprotocol;
+        fast=pc->createDataChannel(dc::FastLabel,fastInit);
+        control=pc->createDataChannel(dc::ControlLabel,controlInit);
+        BindChannel(fast,dc::Lane::Fast); BindChannel(control,dc::Lane::Control);
         worker=std::thread([this]{ Run(); });
         pc->setLocalDescription(rtc::Description::Type::Offer);
+    }
+    void BindChannel(const std::shared_ptr<rtc::DataChannel>& channel,dc::Lane lane) {
+        auto weak=weak_from_this();
+        channel->setBufferedAmountLowThreshold(8192);
+        channel->onOpen([weak,lane] { if(auto self=weak.lock()) {
+            if(self->stopped || self->failed) return;
+            (lane==dc::Lane::Fast?self->stats->fastOpen:self->stats->controlOpen)=true;
+        } });
+        channel->onClosed([weak,lane] { if(auto self=weak.lock()) {
+            (lane==dc::Lane::Fast?self->stats->fastOpen:self->stats->controlOpen)=false;
+            if(!self->stopped) self->Fail();
+        } });
+        channel->onError([weak](std::string) { if(auto self=weak.lock()) self->Fail(); });
+        channel->onMessage([weak,lane](rtc::message_variant message) { if(auto self=weak.lock()) {
+            if(self->stopped || self->failed) return;
+            const auto* bytes=std::get_if<rtc::binary>(&message); dc::Packet packet;
+            if(!bytes || !dc::Decode(reinterpret_cast<const std::uint8_t*>(bytes->data()),bytes->size(),lane,dc::Direction::Client,packet)) {
+                ++self->stats->invalidInput; self->Fail(); return;
+            }
+            std::lock_guard<std::mutex> lock(self->mutex);
+            if(self->stopped || self->failed) return;
+            if(Clock::now()-self->inputRateStart>=std::chrono::seconds(1)) {
+                self->inputRateStart=Clock::now(); self->fastRate=self->controlRate=0;
+            }
+            if((lane==dc::Lane::Fast && ++self->fastRate>2000) ||
+               (lane==dc::Lane::Control && ++self->controlRate>1000)) { self->Fail(); return; }
+            if(lane==dc::Lane::Fast) {
+                if(self->latestMove) {
+                    ++self->stats->fastCoalesced;
+                    if(!dc::Newer(packet.sequence,self->latestMove->sequence)) { ++self->stats->staleFast; return; }
+                }
+                self->latestMove=packet;
+            } else {
+                if(self->inputEvents.size()>=64) { self->Fail(); return; }
+                self->inputEvents.push_back(packet);
+            }
+        } });
     }
     void Run() {
         for(;;) {
@@ -236,9 +295,11 @@ struct WebRtcSession::Impl : std::enable_shared_from_this<Impl> {
         std::lock_guard<std::mutex> once(closing);
         if(closed) return; closed=true; stopped=true; ready=false; wake.notify_all();
         if(worker.joinable()) worker.join();
+        for(const auto& channel:{fast,control}) if(channel) { channel->resetCallbacks(); channel->close(); }
+        stats->fastOpen=false; stats->controlOpen=false; stats->inputEnabled=false;
         if(track) { track->resetCallbacks(); track->close(); }
         if(pc) { pc->resetCallbacks(); pc->close(); }
-        std::lock_guard<std::mutex> lock(mutex); pending={}; events.clear(); earlyCandidates.clear(); ice="Closed";
+        std::lock_guard<std::mutex> lock(mutex); pending={}; events.clear(); earlyCandidates.clear(); inputEvents.clear(); latestMove.reset(); ice="Closed";
     }
 };
 WebRtcSession::WebRtcSession(std::string id,const WebConfig& c,std::shared_ptr<VideoStreamController> control,
@@ -248,6 +309,28 @@ WebRtcSession::WebRtcSession(std::string id,const WebConfig& c,std::shared_ptr<V
 }
 WebRtcSession::~WebRtcSession() { Close(); }
 std::string WebRtcSession::id() const { return impl_->sessionId; }
+bool WebRtcSession::PollInput(dc::Packet& packet) {
+    auto& s=*impl_; std::lock_guard<std::mutex> lock(s.mutex);
+    if(s.stopped || s.failed) return false;
+    if(!s.inputEvents.empty()) { packet=s.inputEvents.front(); s.inputEvents.pop_front(); return true; }
+    if(s.latestMove) { packet=*s.latestMove; s.latestMove.reset(); return true; }
+    return false;
+}
+bool WebRtcSession::SendControl(dc::Packet packet) {
+    auto& s=*impl_;
+    if(s.stopped || s.failed || !s.control || !s.control->isOpen()) return false;
+    packet.sequence=++s.controlSequence;
+    packet.timestampUs=std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count();
+    const auto bytes=dc::Encode(packet,dc::Direction::Server);
+    try {
+        const auto maximum=s.control->maxMessageSize(); s.stats->maxMessageSize=maximum;
+        const auto buffered=s.control->bufferedAmount(); s.stats->controlBuffered=buffered;
+        if(bytes.empty() || bytes.size()>maximum || buffered+bytes.size()>65536) { s.Fail(); return false; }
+        // false means queued by libdatachannel, NOT lost; never enqueue/send a duplicate.
+        s.control->send(reinterpret_cast<const rtc::byte*>(bytes.data()),bytes.size());
+        s.stats->controlBuffered=s.control->bufferedAmount(); return true;
+    } catch(...) { s.Fail(); return false; }
+}
 bool WebRtcSession::SetRemoteDescription(const std::string& sdp) {
     auto& s=*impl_; if(s.stopped || s.answered || !ValidateRtcAnswer(sdp)) return false;
     // Inline candidates and earlier/later trickle share ONE session budget.

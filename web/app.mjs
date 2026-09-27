@@ -1,4 +1,6 @@
-// Phase 5 protocol v1. No browser/DOM vocabulary crosses into RemoteInputBackend.
+// Private wire vocabulary; no browser/DOM codes cross into RemoteInputBackend.
+import {keyByCode} from './protocol_keys.mjs';
+import {InputTransport} from './input_protocol.mjs';
 export function contentRect(cw, ch, fw, fh) {
     if (![cw, ch, fw, fh].every(n => Number.isFinite(n) && n > 0)) return null;
     const scale = Math.min(cw / fw, ch / fh), width = fw * scale, height = fh * scale;
@@ -17,21 +19,7 @@ export function normalizeWheel(x, y, mode) {
     return { horizontal: convert(x), vertical: convert(y) };
 }
 export function protocolKey(code) {
-    if (/^Key[A-Z]$/.test(code)) return code.slice(3);
-    if (/^Digit[0-9]$/.test(code) || /^F([1-9]|1[0-2])$/.test(code)) return code;
-    if (/^Numpad[0-9]$/.test(code)) return 'Keypad' + code.slice(6);
-    const special = {
-        ShiftLeft: 'LeftShift', ShiftRight: 'RightShift', ControlLeft: 'LeftCtrl', ControlRight: 'RightCtrl',
-        AltLeft: 'LeftAlt', AltRight: 'RightAlt', MetaLeft: 'LeftSuper', MetaRight: 'RightSuper',
-        ArrowLeft: 'Left', ArrowRight: 'Right', ArrowUp: 'Up', ArrowDown: 'Down', Quote: 'Apostrophe',
-        BracketLeft: 'LeftBracket', BracketRight: 'RightBracket', Backquote: 'GraveAccent', ContextMenu: 'Menu',
-        NumpadDecimal: 'KeypadDecimal', NumpadDivide: 'KeypadDivide', NumpadMultiply: 'KeypadMultiply',
-        NumpadSubtract: 'KeypadSubtract', NumpadAdd: 'KeypadAdd', NumpadEnter: 'KeypadEnter', NumpadEqual: 'KeypadEqual'
-    };
-    const same = new Set(['Escape', 'Enter', 'Tab', 'Backspace', 'Delete', 'Insert', 'Space', 'Home', 'End',
-        'PageUp', 'PageDown', 'Comma', 'Minus', 'Period', 'Slash', 'Semicolon', 'Equal', 'Backslash',
-        'CapsLock', 'ScrollLock', 'NumLock', 'PrintScreen', 'Pause']);
-    return special[code] || (same.has(code) ? code : null);
+    return keyByCode.get(code)?.name || null;
 }
 export function parseFrame(data) {
     if (!(data instanceof ArrayBuffer) || data.byteLength < 28) throw Error('Truncated frame');
@@ -58,9 +46,10 @@ function start() {
     const connection = document.querySelector('#connection'), lease = document.querySelector('#lease');
     const diagnostics = document.querySelector('#diagnostics');
     const video = document.querySelector('#video'), play = document.querySelector('#play');
-    let transport = 'jpeg', pc = null, signalChain = Promise.resolve(), remoteIce = [];
+    let transport = 'jpeg', pc = null, dataInput = null, signalChain = Promise.resolve(), remoteIce = [];
     function closePeer() {
-        if (pc) { pc.ontrack = pc.onicecandidate = pc.onconnectionstatechange = null; pc.close(); pc = null; }
+        if (dataInput) { dataInput.close(); dataInput = null; }
+        if (pc) { pc.ontrack = pc.onicecandidate = pc.onconnectionstatechange = pc.ondatachannel = null; pc.close(); pc = null; }
         remoteIce = []; video.srcObject = null; video.dataset.framesDecoded = '0'; play.hidden = true;
     }
     function signaling(type, data = {}) { return send(type, {session: connection.dataset.session, ...data}); }
@@ -71,6 +60,21 @@ function start() {
             if (pc || !Array.isArray(message.iceServers) || message.iceServers.length > 8) throw Error('invalid hello');
             const peer = new RTCPeerConnection({iceServers: message.iceServers, iceTransportPolicy: message.iceTransportPolicy});
             pc = peer; remoteIce = []; video.dataset.offers = '0';
+            const input = new InputTransport(peer, {
+                snapshot: () => ({...position, source: pointerSource, keys:[...keys], buttons:[...buttons], mods, focused}),
+                viewport: viewportSize,
+                reset: () => release(false),
+                control: value => { if (pc === peer) setController(value); },
+                viewportAccepted: message => {
+                    display.dataset.width = String(message.width); display.dataset.height = String(message.height);
+                },
+                failed: () => { if (pc === peer && socket === current) current.close(); }
+            });
+            dataInput = input;
+            peer.ondatachannel = event => {
+                if (pc !== peer || socket !== current) event.channel.close();
+                else input.attach(event.channel);
+            };
             let iceEnded = false;
             peer.onicecandidate = event => {
                 if (pc !== peer || socket !== current || iceEnded) return;
@@ -123,7 +127,7 @@ function start() {
         } else if (message.type === 'ice-candidate' || message.type === 'ice-complete') {
             if (!pc) throw Error('ICE without peer');
             const candidate = message.type === 'ice-complete' ? null : {candidate: message.candidate, sdpMid: message.mid};
-            if (candidate && (typeof candidate.candidate !== 'string' || candidate.candidate.length > 1024 || candidate.sdpMid !== 'video')) throw Error('invalid ICE');
+            if (candidate && (typeof candidate.candidate !== 'string' || candidate.candidate.length > 1024 || !['video','0'].includes(candidate.sdpMid))) throw Error('invalid ICE');
             if (pc.remoteDescription) await pc.addIceCandidate(candidate);
             else { if (remoteIce.length >= 65) throw Error('ICE overflow'); remoteIce.push(candidate); }
         } else if (message.type === 'webrtc-state') video.dataset.iceState = message.state;
@@ -134,6 +138,7 @@ function start() {
     play.addEventListener('click', () => video.play().then(() => { play.hidden = true; }).catch(() => {}));
     setInterval(async () => {
         const peer = pc; if (!peer || peer.connectionState !== 'connected') return;
+        if (dataInput) { dataInput.tick(); diagnostics.dataset.input = JSON.stringify(dataInput.stats); }
         try {
             const reports = await peer.getStats(); if (peer !== pc) return;
             const stats = {};
@@ -149,16 +154,18 @@ function start() {
             }
             if (stats.framesDecoded > 0) attempt = 0;
             video.dataset.stats = JSON.stringify(stats); video.dataset.framesDecoded = String(stats.framesDecoded || 0);
-            diagnostics.textContent = `${video.videoWidth}×${video.videoHeight} · ${stats.framesDecoded || 0} decoded · ${stats.framesPerSecond || 0} fps · ${stats.localCandidateType || '?'}/${stats.remoteCandidateType || '?'}`;
+            diagnostics.textContent = `${video.videoWidth}×${video.videoHeight} · ${stats.framesDecoded || 0} decoded · ${stats.framesPerSecond || 0} fps · ${stats.localCandidateType || '?'}/${stats.remoteCandidateType || '?'} · input ${dataInput?.stats.rttMs?.toFixed(1) || '?'} ms RTT`;
         } catch { /* Closed peer; no adaptation or telemetry queue. */ }
     }, 1000);
     let socket, sequence = 0, controller = false, focused = false, pointer = null, composing = false;
-    let frameWidth = 640, frameHeight = 480, lastId = 0n, rect, position = { x: .5, y: .5 };
+    let frameWidth = 640, frameHeight = 480, lastId = 0n, rect, position = { x: .5, y: .5 }, pointerSource = 'mouse';
     let move = null, retry, attempt = 0, resizeTimer, pending = null, decoding = false;
     let mods = { ctrl: false, shift: false, alt: false, super: false };
     const keys = new Set(), buttons = new Set();
     const bits = [['left', 1], ['right', 2], ['middle', 4], ['extra1', 8], ['extra2', 16]];
     function send(type, data = {}) {
+        if (transport === 'webrtc' && !['hello','answer','ice-candidate','ice-complete'].includes(type))
+            return dataInput?.send(type, data) || false;
         if (!socket || socket.readyState !== WebSocket.OPEN) return false;
         if (socket.bufferedAmount > 65536) { socket.close(); return false; }
         socket.send(JSON.stringify({ v: 1, type, seq: ++sequence, ...data })); return true;
@@ -170,11 +177,11 @@ function start() {
         for (const element of [canvas, video, surface]) Object.assign(element.style,
             { left: rect.left + 'px', top: rect.top + 'px', width: rect.width + 'px', height: rect.height + 'px' });
     }
-    function viewport() {
-        if (!controller) return;
-        send('viewport', { width: Math.max(1, Math.round(display.clientWidth)), height: Math.max(1, Math.round(display.clientHeight)),
-            devicePixelRatio: Math.max(.25, Math.min(8, window.devicePixelRatio || 1)) });
+    function viewportSize() {
+        return {width: Math.max(1, Math.round(display.clientWidth)), height: Math.max(1, Math.round(display.clientHeight)),
+            devicePixelRatio: Math.max(.25, Math.min(8, window.devicePixelRatio || 1))};
     }
+    function viewport() { if (controller) send('viewport', viewportSize()); }
     function snapshot() {
         if (controller) send('snapshot', { ...position, keys: [...keys], buttons: [...buttons], mods, focused });
     }
@@ -196,7 +203,9 @@ function start() {
         return normalizedPoint(event.clientX - bounds.left, event.clientY - bounds.top, rect, captured);
     }
     function setMove(event, p) {
-        position = p; move = { ...p, source: ['mouse', 'touch', 'pen'].includes(event.pointerType) ? event.pointerType : 'mouse' };
+        position = p; pointerSource = ['mouse', 'touch', 'pen'].includes(event.pointerType) ? event.pointerType : 'mouse';
+        if (transport === 'webrtc') { move = null; send('mouse_move', {...p, source:pointerSource}); }
+        else move = {...p, source:pointerSource};
     }
     function syncButtons(mask) {
         flushMove();
@@ -237,7 +246,7 @@ function start() {
         if (!controller || !focused) return;
         const key = protocolKey(event.code);
         mods = { ctrl: event.ctrlKey, shift: event.shiftKey, alt: event.altKey, super: event.metaKey };
-        if (key) {
+        if (key && !(down && event.repeat)) {
             if (down) keys.add(key); else keys.delete(key);
             send('key', { key, down, repeat: event.repeat, mods });
         }
@@ -277,6 +286,8 @@ function start() {
     function setController(value) {
         if (!value && controller) release(false);
         controller = value; lease.textContent = value ? 'Controller' : 'View only'; lease.dataset.control = String(value);
+        document.querySelector('#acquire-control').disabled = value || !dataInput?.ready;
+        document.querySelector('#release-control').disabled = !value;
         if (value) { viewport(); snapshot(); }
     }
     async function decode() {
@@ -317,11 +328,13 @@ function start() {
                     const message = JSON.parse(event.data); if (message.v !== 1) throw Error('version');
                     if (message.type === 'welcome') {
                         connection.dataset.session = message.session; transport = message.transport || 'jpeg';
-                        if (!['jpeg', 'webrtc'].includes(transport)) throw Error('transport');
+                        if (!['jpeg', 'webrtc'].includes(transport) || message.inputTransport !==
+                            (transport === 'webrtc' ? 'datachannel-v1' : 'websocket-json-v1')) throw Error('transport');
                         if (transport === 'jpeg') attempt = 0;
                         canvas.hidden = transport === 'webrtc'; video.hidden = transport !== 'webrtc';
-                        document.querySelector('#transport').textContent = transport === 'webrtc' ? 'WebRTC H.264' : 'DIAGNOSTIC JPEG/WebSocket';
-                        setController(message.control);
+                        document.querySelector('#transport').textContent = transport === 'webrtc' ? 'WebRTC H.264 · DataChannel input' : 'DIAGNOSTIC JPEG/WebSocket';
+                        document.querySelector('#acquire-control').hidden = document.querySelector('#release-control').hidden = transport !== 'webrtc';
+                        setController(transport === 'jpeg' && message.control);
                         if (transport === 'webrtc') signaling('hello');
                     }
                     if (['hello','offer','ice-candidate','ice-complete','webrtc-state','error'].includes(message.type)) {
@@ -330,7 +343,7 @@ function start() {
                             if (socket === current) { diagnostics.textContent = 'WebRTC negotiation failed; JPEG mode is available in server configuration.'; current.close(); }
                         }).finally(() => { --pendingSignals; });
                     }
-                    if (message.type === 'lease') setController(message.control);
+                    if (message.type === 'lease' && transport === 'jpeg') setController(message.control);
                     if (message.type === 'view_only') setController(false);
                     if (message.type === 'input_reset') release();
                     if (message.type === 'viewport_accepted') {
@@ -358,9 +371,11 @@ function start() {
         } catch { connection.textContent = 'Connection failed'; }
     });
     document.querySelector('#reconnect').addEventListener('click', () => { if (socket) socket.close(); else connect(); });
+    document.querySelector('#acquire-control').addEventListener('click', () => send('acquire_control'));
+    document.querySelector('#release-control').addEventListener('click', () => send('release_control'));
     new ResizeObserver(() => { layout(); clearTimeout(resizeTimer); resizeTimer = setTimeout(viewport, 150); }).observe(display);
     setInterval(snapshot, 750);
-    function animation() { flushMove(); requestAnimationFrame(animation); }
+    function animation() { flushMove(); dataInput?.flushFast(); dataInput?.drain(); requestAnimationFrame(animation); }
     requestAnimationFrame(animation); layout(); connect();
 }
 if (typeof document !== 'undefined') start();

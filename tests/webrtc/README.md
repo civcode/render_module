@@ -1,4 +1,4 @@
-# WebRTC integration tests
+# WebRTC media and DataChannel integration tests
 
 Enable WEB, VIDEO, OPENH264, WEBRTC, `RENDER_MODULE_BUILD_TESTS` and
 `RENDER_MODULE_BUILD_BROWSER_TESTS`; install the locked `tests/web` npm dependencies
@@ -8,13 +8,15 @@ DISPLAY/WAYLAND_DISPLAY. ICE needs a routed network interface: this harness's
 loopback-only namespace cannot gather libnice host candidates, so use Docker's
 bridge network or a normal development host.
 
-Native tests: original-PTS clock/wrap, actual library FU-A reconstruction/marker/
-sequence/SSRC separation, Sender Reports, NACK/eviction, PLI, REMB, malformed RTCP,
-SDP/ICE validation and real encoder SPS compatibility, repeated negotiating-peer
-teardown, authenticated signaling rejection/ownership/bounds/reconnect/shutdown.
-Browser tests: real decoded colors and controls, Unicode, orbit, four resolutions
-on one peer, two viewers/one encoder, independent SSRCs, viewer input rejection,
-held-key reconnect, refresh, getStats, injected loss and slow-sender isolation.
+Native tests: binary protocol/key vectors, wrap/fences/resync/saturation/parser fuzz,
+original-PTS clock/wrap, actual library FU-A reconstruction/marker/sequence/SSRC
+separation, Sender Reports, NACK/eviction, PLI, REMB, malformed RTCP, SDP/ICE
+validation and real encoder SPS compatibility, repeated negotiating-peer teardown,
+authenticated signaling rejection/ownership/bounds/reconnect/shutdown.
+Browser tests: real decoded colors and DataChannel controls, Unicode, orbit, fast-lane
+loss/reordering, four resolutions on one peer, two viewers/one encoder, independent
+SSRCs, forged viewer input rejection, controller transfer, control-channel loss,
+held-key reconnect, signaling-only WebSocket, refresh, getStats and slow-sender isolation.
 
 `webrtc_chromium_loss1/3` drop respectively 1/3 initial RTP packets per 100,
 after NACK storage; retransmissions are not dropped. This is deterministic
@@ -53,12 +55,12 @@ the tested standalone Node distribution, mount its directory at the same path;
 Configure `RENDER_MODULE_NODE` to its `bin/node` when using this recipe.
 
 ```sh
-docker build -t render-module-webrtc-tests:phase7 tests/webrtc
+docker build -t render-module-webrtc-tests:phase8 tests/webrtc
 # Set NODE_HOME, BUILD (absolute build directory), and MOZ_GMP_PATH if using Firefox.
 docker run --rm --init --user "$(id -u):$(id -g)" --shm-size=1g \
   -v "$PWD:$PWD" -v "$NODE_HOME:$NODE_HOME:ro" -w "$PWD" \
   -e NODE="$NODE_HOME/bin/node" -e MOZ_GMP_PATH \
-  render-module-webrtc-tests:phase7 ctest --test-dir "$BUILD" -L webrtc --output-on-failure
+  render-module-webrtc-tests:phase8 ctest --test-dir "$BUILD" -L webrtc --output-on-failure
 # Same docker options, replace ctest command with either:
 # bash tests/webrtc/run-turn.sh "$BUILD" udp
 # bash tests/webrtc/run-turn.sh "$BUILD" tcp

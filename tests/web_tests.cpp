@@ -167,7 +167,9 @@ void SignalingTests() {
     Client owner; CHECK(owner.Connect(port)); const auto welcome=owner.Until("welcome");
     CHECK(welcome.at("transport")=="webrtc"); const auto ownerId=welcome.at("session");
     owner.Send({{"type","hello"},{"session",ownerId}});owner.Until("hello");owner.Until("offer");
-    CHECK(queue->TakeReleaseAll());owner.Send(KeyMessage(true));Wait([&]{return queue->Size()==1;});
+    CHECK(queue->TakeReleaseAll());
+    // Seed the existing input queue to check cancellation isolation. WebRTC WS input is forbidden.
+    CHECK(queue->Enqueue(Key{RenderKey::A,true}).Accepted());
     for(int mode=0;mode<11;++mode) {
         Client bad; CHECK(bad.Connect(port)); const auto id=bad.Until("welcome").at("session");
         if(mode==0) bad.Send({{"type","hello"},{"session",ownerId}}); // Wrong socket ownership.
@@ -189,7 +191,8 @@ void SignalingTests() {
         bad.Closed();Wait([&]{return server.counters.sessions==1;});
         CHECK(queue->Size()==1); // Bad viewer cannot clear the controller's input.
     }
-    owner.Close();Wait([&]{return server.counters.sessions==0;});CHECK(queue->TakeReleaseAll());
+    owner.Send(KeyMessage(true)); owner.Closed(); // Even the controller cannot use the old input path.
+    Wait([&]{return server.counters.sessions==0;});CHECK(queue->TakeReleaseAll());
     Client reconnect;CHECK(reconnect.Connect(port));const auto next=reconnect.Until("welcome");CHECK(next.at("session")!=ownerId);
     reconnect.Send({{"type","hello"},{"session",ownerId}});reconnect.Closed();
     Client slow;CHECK(slow.Connect(port));const auto id=slow.Until("welcome").at("session");

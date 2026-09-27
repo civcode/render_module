@@ -3,6 +3,8 @@ namespace render_module::detail {
 std::string_view WebAsset(std::string_view path) {
     if (path == "/") return R"RM_WEB_ASSET(@WEB_HTML@)RM_WEB_ASSET";
     if (path == "/app.js") return R"RM_WEB_ASSET(@WEB_JS@)RM_WEB_ASSET";
+    if (path == "/input_protocol.mjs") return R"RM_WEB_ASSET(@WEB_INPUT_JS@)RM_WEB_ASSET";
+    if (path == "/protocol_keys.mjs") return R"RM_WEB_ASSET(@WEB_KEYS_JS@)RM_WEB_ASSET";
     if (path == "/style.css") return R"RM_WEB_ASSET(@WEB_CSS@)RM_WEB_ASSET";
     return {};
 }

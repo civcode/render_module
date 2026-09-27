@@ -86,11 +86,13 @@ void SdpTest() {
     CHECK(!ValidateRtcCandidate("garbage","video"));CHECK(!ValidateRtcAnswer("garbage"));
     CHECK(!ValidateRtcAnswer(std::string(WebRtcSdpLimit+1,'a')));
     const auto answer=[](std::string fmtp) {
-        return "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE video\r\n"
+        return "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE video 0\r\n"
             "m=video 9 UDP/TLS/RTP/SAVPF 96\r\nc=IN IP4 0.0.0.0\r\na=mid:video\r\na=recvonly\r\na=rtcp-mux\r\n"
             "a=ice-ufrag:test\r\na=ice-pwd:012345678901234567890123\r\na=setup:active\r\n"
             "a=fingerprint:sha-256 00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00\r\n"
-            "a=rtpmap:96 H264/90000\r\na=fmtp:96 packetization-mode=1;"+fmtp+"\r\n";
+            "a=rtpmap:96 H264/90000\r\na=fmtp:96 packetization-mode=1;"+fmtp+"\r\n"
+            "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\n"
+            "a=mid:0\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n";
     };
     CHECK(ValidateRtcAnswer(answer("profile-level-id=42c028")));
     CHECK(ValidateRtcAnswer(answer("profile-level-id=42e01f;max-recv-level=e028")));
@@ -102,6 +104,11 @@ void SdpTest() {
     CHECK(!ValidateRtcAnswer(answer("profile-level-id=42c028;packetization-mode=0")));
     auto badDirection=answer("profile-level-id=42c028");badDirection.replace(badDirection.find("recvonly"),8,"sendrecv");
     CHECK(!ValidateRtcAnswer(badDirection));
+    auto noData=answer("profile-level-id=42c028"); noData.erase(noData.find("m=application")); CHECK(!ValidateRtcAnswer(noData));
+    auto wrongBundle=answer("profile-level-id=42c028"); wrongBundle.replace(wrongBundle.find("BUNDLE video 0"),14,"BUNDLE video");
+    CHECK(!ValidateRtcAnswer(wrongBundle));
+    auto removedData=answer("profile-level-id=42c028"); removedData.replace(removedData.find("m=application 9"),15,"m=application 0");
+    CHECK(!ValidateRtcAnswer(removedData));
     auto encoder=video::CreateOpenH264Encoder();video::RgbaFramePool pool;video::I420Converter converter;
     std::uint64_t id=0;
     for(const auto size:{std::pair<int,int>{1280,720},{1600,900},{1920,1080},{1280,720}}) {

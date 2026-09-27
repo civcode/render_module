@@ -1,6 +1,7 @@
 #pragma once
 #include "render_module/config.hpp"
 #include "render_module/video.hpp"
+#include "control/input_protocol.hpp"
 #include <atomic>
 #include <memory>
 #include <string>
@@ -11,6 +12,10 @@ constexpr std::size_t WebRtcSdpLimit=32768, WebRtcCandidateLimit=1024, WebRtcMes
 struct RtcCounters {
     std::atomic<std::uint64_t> packets{0}, bytes{0}, nacks{0}, retransmits{0}, plis{0};
     std::atomic<std::uint64_t> rembBps{0}, rembTimeMs{0}, submitted{0}, rejected{0}, invalidRtcp{0}, testDropped{0};
+    std::atomic<bool> fastOpen{false}, controlOpen{false}, inputEnabled{false};
+    std::atomic<std::uint64_t> fastReceived{0}, controlReceived{0}, inputAccepted{0}, inputRejected{0}, staleFast{0};
+    std::atomic<std::uint64_t> inputQueueFull{0}, inputResyncs{0}, invalidInput{0}, fastCoalesced{0};
+    std::atomic<std::uint64_t> controlBuffered{0}, browserFastBuffered{0}, browserControlBuffered{0}, maxMessageSize{0}, inputRttUs{0};
 };
 struct RtcSignal { std::string type, text, mid; };
 struct RtcSessionSnapshot {
@@ -37,6 +42,8 @@ public:
     bool RemoteIceComplete();
     void SendVideo(const video::EncodedFrame&);
     bool Poll(RtcSignal&);
+    bool PollInput(dc::Packet&);
+    bool SendControl(dc::Packet);
     bool Healthy();
     RtcSessionSnapshot Snapshot() const;
     void Close();

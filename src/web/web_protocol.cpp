@@ -100,7 +100,7 @@ bool ParseWebMessage(std::string_view text, const WebConfig& config,
                 Require(!next.sdp.empty() && next.sdp.size()<=32768 && next.sdp.find('\0')==std::string::npos);
             } else if(type=="ice-candidate") {
                 next.kind=WebMessage::Kind::RtcCandidate; next.candidate=String(o.at("candidate")); next.mid=String(o.at("mid"));
-                Require(!next.candidate.empty() && next.candidate.size()<=1024 && next.mid=="video");
+                Require(!next.candidate.empty() && next.candidate.size()<=1024 && (next.mid=="video" || next.mid=="0"));
             } else next.kind=WebMessage::Kind::RtcComplete;
         } else if (type == "frame_ack") {
             next.kind = WebMessage::Kind::FrameAck;

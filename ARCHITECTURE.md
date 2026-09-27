@@ -271,8 +271,8 @@ release-all cancellation barrier; no alternate ImGui or camera path is introduce
 See [WEB_PROTOCOL.md](WEB_PROTOCOL.md) for protocol v1, explicit bounds, security,
 viewport negotiation, input details, diagnostics and test coverage. **JPEG/WS is
 an explicit diagnostic transport**; Phase 7 adds optional WebRTC media. Phase 6
-software video remains transport-independent. PBOs, hardware encoding and
-DataChannels are not implemented.
+software video remains transport-independent. Phase 8 adds DataChannel input;
+PBOs and hardware encoding are not implemented.
 
 ## Software realtime video (Phase 6)
 
@@ -320,15 +320,30 @@ requests share one coalescing `VideoStreamController`. REMB is observation only;
 no unbounded pacing queue is introduced.
 
 The existing authenticated WebSocket carries bounded versioned offer/answer/ICE
-signaling and all Phase 5 input/viewport messages. Signaling and close are serialized
-on its I/O thread; library callbacks use weak ownership and bounded event queues.
+signaling only in WebRTC mode. Phase 8 input/viewport messages use two DataChannels.
+Signaling, input authorization and close remain serialized on the WS I/O thread;
+library callbacks use weak ownership and bounded event queues.
 Media failure/disconnect tears down that session and invokes existing controller
 release-all recovery. Render/GL ownership and Phase 6 public interfaces are unchanged.
 
 The browser's video dimensions drive image/input mapping; root resize changes the
 in-band SPS/PPS/IDR without renegotiating a healthy peer. Dependencies and the two
 libnice caveats (relay-policy build patch, unsupported TURN/TLS) are documented in
-[WEBRTC.md](WEBRTC.md). **Phase 8/DataChannel input has not started.**
+[WEBRTC.md](WEBRTC.md).
+
+## DataChannel input/control (Phase 8)
+
+Each peer owns server-created `input-fast-v1` (unordered, zero retransmissions)
+and `control-v1` (ordered/reliable). An allocation-free binary parser validates
+explicit big-endian packets before bounded callback inboxes reach the WS owner.
+The existing Phase 4 queue/backend remains the only path to ImGui/Canvas/View3D.
+Reliable absolute positions and fast-sequence fences prevent late moves rewinding
+clicks or snapshots. Queue failure invokes ReleaseAll and an epoch-tagged resync;
+controller transfer always requires a fresh snapshot. Browser motion has one
+replaceable unsent slot, while reliable queues are bounded and fail closed.
+Explicit JPEG mode retains WS input; there is no production dual-input path.
+See [INPUT_PROTOCOL.md](INPUT_PROTOCOL.md) for the wire table, authority, deadlines,
+backpressure, RTT diagnostics and tests. **Phase 9/PBO readback remains unstarted.**
 
 ## Per-window frame flow
 

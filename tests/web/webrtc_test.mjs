@@ -10,7 +10,7 @@ const statePath=path.join(artifact,'state.json'); await fs.rm(statePath,{force:t
 const env={...process.env,RENDER_MODULE_TEST_WEBRTC:'1'}; delete env.DISPLAY; delete env.WAYLAND_DISPLAY;
 const server=spawn(fixture,[statePath],{env,stdio:['ignore','pipe','pipe']});
 let log='',exitCode=null,browser,page;
-const signalingTrace=[];
+const signalingTrace=[], unexpectedWsInput=[];
 server.stdout.on('data', b=>{log=(log+b).slice(-65536);});
 server.stderr.on('data', b=>{log=(log+b).slice(-65536);});
 server.on('exit', c=>{exitCode=c;});
@@ -31,11 +31,23 @@ try {
     const isFirefox=process.env.RENDER_MODULE_TEST_BROWSER==='firefox';
     browser=await (isFirefox?firefox:chromium).launch({headless:true,...(!isFirefox?{args:['--no-sandbox','--disable-gpu','--no-proxy-server']}: {})});
     const context=await browser.newContext({viewport:{width:1400,height:900}});
-    await context.addInitScript(()=>{
-        const Native=window.RTCPeerConnection; window.testPeers=[]; window.testDataChannels=0; window.testMediaTrace=[];
+    await context.addInitScript(({loss})=>{
+        const Native=window.RTCPeerConnection; window.testPeers=[]; window.testDataChannels=0; window.testMediaTrace=[]; window.testReceivedChannels=[];
         window.RTCPeerConnection=new Proxy(Native,{construct(Target,args){
             const pc=new Target(...args); window.testPeers.push(pc);
             pc.addEventListener('track',()=>{window.testTrackSeen=true;});
+            pc.addEventListener('datachannel',({channel:c})=>{
+                window.testReceivedChannels.push(c);
+                if(c.label!=='input-fast-v1')return;
+                const send=c.send.bind(c);let count=0,delayed=false;
+                window.testInputFaults={dropped:0,delayed:0};
+                c.send=data=>{
+                    if(++count%100<loss){++window.testInputFaults.dropped;return;}
+                    if(!delayed&&count%20===0){delayed=true;++window.testInputFaults.delayed;
+                        setTimeout(()=>{delayed=false;if(c.readyState==='open')send(data);},100);
+                    }else send(data);
+                };
+            });
             for(const method of ['setRemoteDescription','createAnswer','setLocalDescription']) {
                 const native=pc[method].bind(pc);
                 pc[method]=async(...a)=>{try {const result=await native(...a);
@@ -43,14 +55,15 @@ try {
                     if(window.testMediaTrace.length>32)window.testMediaTrace.shift();return result;
                 }catch(e){window.testMediaTrace.push({method,error:e.name});throw e;}};
             }
-            pc.createDataChannel=()=>{++window.testDataChannels; throw Error('DataChannel outside Phase 7');}; return pc;
+            pc.createDataChannel=()=>{++window.testDataChannels; throw Error('Only server-created DataChannels are allowed');}; return pc;
         }});
-    });
+    },{loss:Number(process.env.RENDER_MODULE_TEST_LOSS||0)});
     page=await context.newPage(); page.on('pageerror',e=>errors.push(String(e)));
     page.on('websocket', ws=>{
         for(const event of ['framesent','framereceived']) ws.on(event,({payload})=>{
             if(typeof payload!=='string') return;
             try { const m=JSON.parse(payload);
+                if(event==='framesent' && !['hello','answer','ice-candidate','ice-complete'].includes(m.type)) unexpectedWsInput.push(m.type);
                 if(['hello','offer','answer','ice-candidate','ice-complete','webrtc-state','error'].includes(m.type)) {
                     signalingTrace.push({event,type:m.type,state:m.state,code:m.code,
                         codec:m.sdp?.split('\r\n').filter(l=>l.startsWith('a=fmtp:') || l.startsWith('m=') || l==='a=recvonly'),
@@ -73,7 +86,11 @@ try {
             application:pc.remoteDescription.sdp.includes('m=application'),audio:pc.remoteDescription.sdp.includes('m=audio')};
     });
     assert.ok(codec.offer.some(l=>l.includes('profile-level-id=42c028') && l.includes('packetization-mode=1')));
-    assert.equal(codec.application,false); assert.equal(codec.audio,false);
+    assert.equal(codec.application,true); assert.equal(codec.audio,false);
+    assert.deepEqual(await page.evaluate(()=>window.testReceivedChannels.map(c=>({label:c.label,ordered:c.ordered,
+        retransmits:c.maxRetransmits,lifetime:c.maxPacketLifeTime,protocol:c.protocol})).sort((a,b)=>a.label.localeCompare(b.label))),[
+        {label:'control-v1',ordered:true,retransmits:null,lifetime:null,protocol:'render-module-input-v1'},
+        {label:'input-fast-v1',ordered:false,retransmits:0,lifetime:null,protocol:'render-module-input-v1'}]);
     assert.equal((await metrics()).jpegEncoded,0);
     assert.equal(await page.locator('#picture').getAttribute('data-frame-id'),null);
     await until(async()=>{try {return (await state()).frame>0;} catch{return false;}},'fixture state');
@@ -90,13 +107,24 @@ try {
             return {x:r.left+x/v.videoWidth*r.width,y:r.top+y/v.videoHeight*r.height};},point);
     }
     async function click(name) {const p=await screen((await state())[name]);await page.mouse.click(p.x,p.y);}
-    await click('button'); await until(async()=>(await state()).clicks===1,'WebSocket ImGui click');
+    await click('button'); await until(async()=>(await state()).clicks===1,'DataChannel ImGui click');
     await click('edit'); await page.keyboard.insertText('Phase 7 äöü ß 日本 🙂');
-    await until(async()=>(await state()).text==='Phase 7 äöü ß 日本 🙂','WebSocket Unicode');
+    await until(async()=>(await state()).text==='Phase 7 äöü ß 日本 🙂','DataChannel Unicode');
     const camera=(await state()).camera,p=await screen((await state()).view);
     await page.mouse.move(p.x,p.y);await page.mouse.down({button:'right'});await sleep(100);
     await page.mouse.move(p.x+65,p.y+35,{steps:8});await sleep(150);await page.mouse.up({button:'right'});
-    await until(async()=>(await state()).camera.some((n,i)=>Math.abs(n-camera[i])>.1),'WebSocket orbit');
+    await until(async()=>(await state()).camera.some((n,i)=>Math.abs(n-camera[i])>.1),'DataChannel orbit');
+    // Deterministic DataChannel-only loss/reordering, separate from Phase 7's RTP loss hook.
+    await page.evaluate(()=>{
+        const surface=document.querySelector('#input'),r=surface.getBoundingClientRect();
+        for(let n=0;n<350;++n)surface.dispatchEvent(new PointerEvent('pointermove',{
+            clientX:r.left+50+n%20,clientY:r.top+50,pointerId:1,pointerType:'mouse',buttons:0}));
+    });
+    await click('button');await until(async()=>(await state()).clicks===2,'reliable click survives fast loss/reordering');
+    await sleep(200);
+    const inputFaults=await page.evaluate(()=>window.testInputFaults);
+    assert.ok(inputFaults.delayed>0);if(Number(process.env.RENDER_MODULE_TEST_LOSS||0))assert.ok(inputFaults.dropped>0);
+    await until(async()=>(await metrics()).webrtc_clients.some(c=>c.input_stale_fast>0),'late fast motion rejected');
     const session=await page.locator('#connection').getAttribute('data-session');
     for(const [width,height] of [[1280,720],[1600,900],[1920,1080],[1280,720]]) {
         await page.locator('#display').evaluate((d,[w,h])=>{d.style.flex='none';d.style.width=w+'px';d.style.height=h+'px';},[width,height]);
@@ -104,7 +132,31 @@ try {
         assert.equal(await page.locator('#connection').getAttribute('data-session'),session,'no reconnect for resize');
         assert.equal(await page.locator('#video').getAttribute('data-offers'),'1','no renegotiation for resize');
     }
-    const watchContext=await browser.newContext({viewport:{width:500,height:900}}),watch=await watchContext.newPage();
+    const watchContext=await browser.newContext({viewport:{width:500,height:900}});
+    await watchContext.addInitScript(()=>{
+        const Native=window.RTCPeerConnection;window.viewerEpoch=0;
+        window.RTCPeerConnection=new Proxy(Native,{construct(Target,args){
+            const pc=new Target(...args);
+            pc.addEventListener('datachannel',({channel:c})=>{
+                if(c.label!=='control-v1')return;
+                c.addEventListener('message',({data})=>{
+                    if(!(data instanceof ArrayBuffer))return;const v=new DataView(data);
+                    if(v.getUint8(1)===128)window.viewerEpoch=v.getUint32(22);
+                    if(v.getUint8(1)===130)window.viewerEpoch=v.getUint32(18);
+                });
+                const send=c.send.bind(c);c.send=data=>{
+                    const v=new DataView(data);
+                    if(window.forgeViewer && v.getUint8(1)===12) {
+                        const copy=data.slice(0),x=new DataView(copy);x.setUint8(1,window.forgeViewer);
+                        if(window.forgeViewer===5){x.setUint16(16,1);x.setUint8(18,1);x.setUint8(19,0);x.setUint32(20,window.viewerEpoch);}
+                        else {x.setUint16(16,320);x.setUint16(18,240);x.setFloat32(20,1);}
+                        window.forgeViewer=0;send(copy);
+                    } else send(data);
+                };
+            });return pc;
+        }});
+    });
+    const watch=await watchContext.newPage();
     watch.on('pageerror',e=>errors.push(String(e)));
     await watch.goto(origin);await watch.locator('#token').fill(token);await watch.locator('#login button').click();
     await until(()=>decoded(watch),'second browser decoding');
@@ -112,11 +164,17 @@ try {
     let m=await metrics();assert.equal(m.webrtc_connected,2);assert.equal(new Set(m.webrtc_clients.map(c=>c.ssrc)).size,2);
     assert.ok(m.webrtc_clients.every(c=>c.pending<=1));
     const rejected=m.inputRejected, clicks=(await state()).clicks;
+    for(const type of [5,9]) {
+        const before=await metrics();await watch.evaluate(t=>{window.forgeViewer=t;},type);
+        await until(async()=>(await metrics()).inputRejected>before.inputRejected,'server rejects forged viewer DataChannel input');
+        const after=await metrics();assert.equal(after.width,before.width);assert.equal(after.height,before.height);
+    }
     await watch.evaluate(()=>new Promise(resolve=>{
         const url=new URL('/api/ws',location.href);url.protocol='ws:';const ws=new WebSocket(url);
         ws.onmessage=e=>{if(typeof e.data!=='string')return;const m=JSON.parse(e.data);
             if(m.type==='welcome')ws.send(JSON.stringify({v:1,seq:1,type:'mouse_button',button:'left',down:true}));
-            if(m.type==='view_only'){ws.close();resolve();}};
+        };
+        ws.onclose=()=>resolve();
     }));
     await until(async()=>(await metrics()).inputRejected>rejected,'server rejects viewer input');
     assert.equal((await state()).clicks,clicks);
@@ -133,6 +191,17 @@ try {
         assert.ok(end.webrtc_clients.every(c=>c.pending<=1),'per-viewer queue remains bounded');
         assert.ok(JSON.parse(await page.locator('#video').getAttribute('data-stats')).framesPerSecond>=15,'slow viewer does not stall controller');
     }
+    // Explicit lease transfer releases held state, and the new controller must complete a fresh snapshot.
+    await page.bringToFront();await click('edit');await page.keyboard.down('Control');await page.keyboard.down('a');
+    await until(async()=>(await state()).ctrl && (await state()).keyHeld,'held state before transfer');
+    await page.evaluate(()=>document.querySelector('#release-control').click());
+    await until(()=>watch.locator('#lease').getAttribute('data-control').then(v=>v==='true'),'viewer promoted after snapshot');
+    await until(async()=>!(await state()).ctrl && !(await state()).keyHeld,'transfer releases old keys');
+    assert.equal(await page.locator('#lease').getAttribute('data-control'),'false');
+    await page.keyboard.up('a');await page.keyboard.up('Control');
+    await watch.evaluate(()=>document.querySelector('#release-control').click());
+    await page.evaluate(()=>document.querySelector('#acquire-control').click());
+    await until(()=>page.locator('#lease').getAttribute('data-control').then(v=>v==='true'),'controller reacquires with fresh snapshot');
     const before=Number(await page.locator('#video').getAttribute('data-frames-decoded'));
     await watchContext.close();await until(async()=>(await metrics()).webrtc_connected===1,'disconnect only viewer');
     await until(async()=>Number(await page.locator('#video').getAttribute('data-frames-decoded'))>before,'controller stream survives viewer disconnect');
@@ -149,27 +218,32 @@ try {
     // Disconnect with held physical state and no final keyup/blur packet.
     await page.bringToFront();await click('edit');await page.keyboard.down('Control');await page.keyboard.down('a');
     await until(async()=>(await state()).ctrl && (await state()).keyHeld,'held keys');
-    await page.evaluate(()=>document.querySelector('#reconnect').click());
-    await until(async()=>!(await state()).ctrl && !(await state()).keyHeld,'disconnect releases input');
+    await page.evaluate(()=>window.testReceivedChannels.find(c=>c.label==='control-v1'&&c.readyState==='open').close());
+    await until(async()=>!(await state()).ctrl && !(await state()).keyHeld,'control-channel loss releases input');
     await until(async()=>await page.locator('#connection').getAttribute('data-session')!==session && await decoded(page),'fresh peer after reconnect');
     await page.keyboard.up('a');await page.keyboard.up('Control');
+    const afterControlLoss=await page.locator('#connection').getAttribute('data-session');
+    await page.evaluate(()=>document.querySelector('#reconnect').click());
+    await until(async()=>await page.locator('#connection').getAttribute('data-session')!==afterControlLoss && await decoded(page),'explicit reconnect');
     for(let n=0;n<2;++n) {await page.reload();await until(()=>decoded(page),'refresh decoding');}
     await until(async()=>!(await state()).mouseHeld && !(await state()).ctrl && !(await state()).keyHeld,'no stuck state');
     assert.equal(await page.evaluate(()=>window.testDataChannels),0);
     assert.equal((await metrics()).jpegEncoded,0);assert.equal((await metrics()).encoder.errors,0);
-    assert.deepEqual(errors,[]);assert.equal((await state()).glError,0);
-    const report={browser:browser.version(),engine:isFirefox?'firefox':'chromium',lossPercent:loss,
+    assert.deepEqual(errors,[]);assert.deepEqual(unexpectedWsInput,[],'production WS carries signaling only');assert.equal((await state()).glError,0);
+    const report={browser:browser.version(),engine:isFirefox?'firefox':'chromium',lossPercent:loss,inputFaults,
         forcedRelay:!!process.env.RENDER_MODULE_TEST_TURN,slowViewer:!!process.env.RENDER_MODULE_TEST_SLOW_VIEWER,measurement,twoViewerMetrics:end,metrics:mediaMetrics,
         browserStats:JSON.parse(await page.locator('#video').getAttribute('data-stats')),fmtp:codec.offer,nativeAnswerFmtp:codec.answer,
         answerFmtp:signalingTrace.find(m=>m.type==='answer')?.codec?.filter(l=>l.startsWith('a=fmtp:'))};
     await fs.writeFile(path.join(artifact,'metrics.json'),JSON.stringify(report,null,2));
     await page.screenshot({path:path.join(artifact,'browser.png')});
-    console.log('WebRTC E2E passed: actual H264 decode/colors, WebSocket input, four sizes/one PC, two viewers, independent SSRC, viewer rejection, reconnect/refresh, bounded queues.');
+    console.log('WebRTC E2E passed: actual H264 decode/colors, DataChannel input, four sizes/one PC, two viewers, independent SSRC, viewer rejection, reconnect/refresh, bounded queues.');
     console.log(JSON.stringify(report));
 } catch(error) {
     if(page)await page.screenshot({path:path.join(artifact,'failure.png')}).catch(()=>{});
     const diagnostic=page?await page.evaluate(()=>({connection:document.querySelector('#connection').textContent,
-        video:{...document.querySelector('#video').dataset},trackSeen:window.testTrackSeen,
+        video:{...document.querySelector('#video').dataset},input:document.querySelector('#diagnostics').dataset.input,
+        channels:window.testReceivedChannels?.map(c=>({label:c.label,state:c.readyState,ordered:c.ordered,retransmits:c.maxRetransmits,
+            lifetime:c.maxPacketLifeTime,protocol:c.protocol})),trackSeen:window.testTrackSeen,
         receiverCodecs:RTCRtpReceiver.getCapabilities('video')?.codecs,mediaTrace:window.testMediaTrace,peers:window.testPeers?.map(p=>({ice:p.iceConnectionState,connection:p.connectionState,signaling:p.signalingState}))})).catch(()=>null):null;
     await fs.writeFile(path.join(artifact,'failure.json'),JSON.stringify({diagnostic,signalingTrace},null,2));
     console.error(log,errors,diagnostic,signalingTrace);throw error;

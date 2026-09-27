@@ -1,9 +1,10 @@
 # Web backend — protocol v1
 
 JPEG/WebSocket remains the explicit **diagnostic transport**. Optional [Phase 7
-WebRTC](WEBRTC.md) replaces media delivery only: authentication, controller/input
-and viewport handling below are shared. The JPEG binary protocol is unchanged.
-DataChannels, asynchronous PBOs and hardware encoding are not present.
+WebRTC](WEBRTC.md) supplies H.264 media; [Phase 8](INPUT_PROTOCOL.md) moves its input,
+controller operations and viewport negotiation onto DataChannels. Authentication
+and WS signaling remain shared. The JSON input/JPEG protocol below applies only
+to diagnostic JPEG mode and is unchanged. PBOs and hardware encoding are not present.
 
 ## Dependencies and packaging
 
@@ -14,7 +15,7 @@ Boost >=1.75 is required (tested: Ubuntu Boost 1.83). `JPEG::JPEG` supplies the
 libjpeg encoder API (tested: libjpeg-turbo 2.1.5). See
 [WEB_NOTICE.md](third_party/WEB_NOTICE.md). No external encoder process is used.
 
-All HTTP-library types are confined to `src/web/`. The three files in `web/`
+All HTTP-library types are confined to `src/web/`. The assets in `web/`
 are embedded into the library by CMake, including installed builds. No disk asset
 root, Node.js, npm, or browser framework is needed at runtime.
 
@@ -147,31 +148,33 @@ not transactional and should be retried by the user if recovery is reported.
 
 ## WebRTC signaling (Phase 7)
 
-`welcome` adds `transport: "jpeg" | "webrtc"`. In WebRTC mode there are no JPEG
-binary frames or frame ACKs. The same authenticated, Origin-validated `/api/ws`
+`welcome` adds `transport: "jpeg" | "webrtc"` and `inputTransport:
+"websocket-json-v1" | "datachannel-v1"`, respectively. In WebRTC mode there are no
+JPEG binary frames or frame ACKs; WS input is rejected, even from the controller. The same authenticated, Origin-validated `/api/ws`
 connection carries signaling; there is no unauthenticated signaling endpoint.
 Every signaling message has `v:1`, `type`, and the owning 32-hex `session` ID.
-Client messages additionally use the same increasing `seq` as input. Viewers may
+Client signaling messages use their own increasing `seq`. Viewers may
 negotiate their own media but may not send input/resize or target another session.
 
 | Type | Direction | Fields/action |
 |---|---|---|
 | `hello` | client → server | Starts one negotiation per session |
 | `hello` | server → client | `iceServers` (urls/username/credential), `iceTransportPolicy` (`all`/`relay`) |
-| `offer` | server → client only | `sdp`: one send-only H.264 video track |
+| `offer` | server → client only | `sdp`: send-only H.264 plus one SCTP application m-line |
 | `answer` | client → server | `sdp`: validated recv-only H.264 answer, once |
-| `ice-candidate` | either | `candidate`, `mid:"video"`; trickle ICE |
+| `ice-candidate` | either | `candidate`, `mid:"video"` or `"0"`; trickle ICE |
 | `ice-complete` | either | No further candidates in that direction |
 | `webrtc-state` | server → client | `state`: New/Checking/Connected/Completed/Disconnected/Failed/Closed |
 | `error` | server → client | Credential-free `code`, e.g. `negotiation_failed` or `media_failed`; session closes |
 
-Signaling envelopes <=64 KiB; SDP <=32 KiB; candidate <=1024 bytes. Input still
-has the 8 KiB limit. At most 128 signaling messages/second, within the existing
+Signaling envelopes <=64 KiB; SDP <=32 KiB; candidate <=1024 bytes. JPEG-mode JSON
+input retains its 8 KiB limit; DataChannel packets have a separate 512-byte limit. At most 128 signaling messages/second, within the existing
 1000-message total; 64 remote candidates/session, <=96 queued media signals and
 <=16 WS controls. Early candidates wait for the answer. Duplicate hello/answer/
 completion, stale sequence/session, unsupported SDP, wrong media direction/type,
 malformed/oversized messages and overflow close only that session. Server-offer
-mode rejects client offers and extra audio/application m-lines.
+mode rejects client offers, audio, missing SCTP, extra m-lines and answers without
+both video and application MIDs in the offered BUNDLE group.
 
 Client starts hello within 10 seconds; negotiation must become ready within 15.
 Browser empty-string/null ICE completion events are normalized to one message.

@@ -41,9 +41,10 @@ public:
         server_.ObserveViewport({config.width, config.height});
         const std::string host = config.web.bindAddress.find(':') == std::string::npos ?
             config.web.bindAddress : "[" + config.web.bindAddress + "]";
-        std::fprintf(stderr, "RenderModule Web backend (%s; input over WebSocket)\n"
+        std::fprintf(stderr, "RenderModule Web backend (%s; input over %s)\n"
             "  Size : %dx%d\n  HTTP : http://%s:%u/\n  Auth : %s\n",
-            transport_==WebTransport::WebRtc?"WebRTC H.264":"TEMPORARY JPEG/WebSocket",
+            transport_==WebTransport::WebRtc?"WebRTC H.264":"DIAGNOSTIC JPEG/WebSocket",
+            transport_==WebTransport::WebRtc?"DataChannels":"WebSocket",
             config.width, config.height, host.c_str(), server_.Port(),
             config.web.authToken.empty() ? "disabled" : "enabled");
         return true;

@@ -3,10 +3,10 @@
 `RootFramebuffer → VideoCapture → Phase 6 VideoPipeline → EncodedFrame →
 per-viewer libdatachannel H264RtpPacketizer → DTLS/SRTP → browser <video>`.
 
-Input, authentication, controller election and viewport requests **remain on the
-Phase 5 WebSocket**. No DataChannel, audio, hardware encoding, PBO, adaptation,
-simulcast or SFU is created. **Phase 8 has not started.** Phase 6 public interfaces
-and encoding/conversion implementation are unchanged.
+[Phase 8 input/control](INPUT_PROTOCOL.md) uses two DataChannels on this same peer.
+The authenticated WebSocket now carries signaling only; explicit JPEG mode retains
+WebSocket input. Audio, hardware encoding, PBOs, adaptation, simulcast and SFUs are
+not implemented. Phase 6 public interfaces and encoding/conversion are unchanged.
 
 ## Build and select
 
@@ -44,8 +44,8 @@ RenderModule headers expose no libdatachannel types. See [licenses](third_party/
 libdatachannel **v0.24.5**, immutable commit
 `443f6934d9007eb7076ab7825ba330f355fcbead`, media enabled, upstream WebSockets and
 examples/tests disabled. ICE uses **libnice**, DTLS uses **OpenSSL**, SRTP uses
-pinned bundled libsrtp. usrsctp is an upstream build dependency but no SCTP
-application m-line or DataChannel is negotiated.
+pinned bundled libsrtp. The already-pinned usrsctp dependency now carries Phase 8
+DataChannels; no new dependency or SCTP tuning was added.
 
 A source-hash-checked build-tree patch in `cmake/LibDataChannelNiceRelay.cmake`
 sets libnice's `force-relay` property for `TransportPolicy::Relay`. Upstream only
@@ -78,8 +78,8 @@ unless deliberately diagnosing a private test environment.
 
 ## Negotiation and media contract
 
-One server-offered, send-only video m-line, MID `video`, H.264 payload type **96**.
-Exact offered fmtp:
+One server-offered, send-only video m-line, MID `video`, H.264 payload type **96**,
+plus Phase 8's bundled SCTP application m-line, MID `0`. Exact video fmtp:
 
 ```text
 profile-level-id=42c028;packetization-mode=1;level-asymmetry-allowed=1
@@ -151,7 +151,11 @@ Traffic totals are **active-client snapshots**, so disconnects can lower totals.
 RTP bytes are measured before SRTP/IP/TURN overhead and represent send attempts,
 not wire-rate accounting; retransmissions are included. Test drops are separate.
 
-## Verification
+## Phase 7 baseline verification
+
+The measurements/counts below are the committed Phase 7 baseline, before adding
+DataChannels. Current input transport and Phase 8 verification are documented in
+[INPUT_PROTOCOL.md](INPUT_PROTOCOL.md).
 
 See [test recipes](tests/webrtc/README.md). Chromium 153.0.8010.12 and Firefox 155.0
 (with Mozilla-manifest-verified Cisco OpenH264 GMP 2.6.0) both decoded real video,
