@@ -4,8 +4,8 @@
 per-viewer libdatachannel H264RtpPacketizer → DTLS/SRTP → browser <video>`.
 
 [Phase 8 input/control](INPUT_PROTOCOL.md) uses two DataChannels on this same peer.
-The authenticated WebSocket now carries signaling only; explicit JPEG mode retains
-WebSocket input. Audio, hardware encoding, PBOs, adaptation, simulcast and SFUs are
+The authenticated WebSocket now carries signaling only; explicit WebSocket image
+mode (JPEG or PNG) retains WebSocket input. Audio, hardware encoding, PBOs, adaptation, simulcast and SFUs are
 not implemented. Phase 6 public interfaces and encoding/conversion are unchanged.
 
 ## Build and select
@@ -27,15 +27,16 @@ env -u DISPLAY -u WAYLAND_DISPLAY build-rtc/Release/bin/RenderModule3DDemo \
 
 Or set `config.backend = Backend::Web` and
 `config.web.transport = WebTransport::WebRtc` before `RenderModule::Init(config)`.
-The default remains `WebTransport::JpegWebSocket`; `--web-transport jpeg` selects
-that explicitly. These are separate modes, not simultaneous video transports.
+The default remains the legacy-named `WebTransport::JpegWebSocket`; `--web-transport
+jpeg` selects WebSocket image mode, and `--web-image-codec jpeg|png` selects its codec.
+These are separate modes, not simultaneous video transports.
 WebRTC requires even initial dimensions >=16, maxima <=1920×1080 and 1–30 fps.
 Viewport requests are fitted to the maxima, floored to even dimensions, minimum
 16 per axis. This avoids a cropped-video/root-input coordinate mismatch.
 Capture defaults to 20 fps; render cadence is independent. No viewers means no
-capture. No automatic downgrade to JPEG, resolution ladder or bitrate adaptation.
+capture. No automatic downgrade to WebSocket images, resolution ladder or bitrate adaptation.
 
-`WEBRTC=OFF` neither fetches nor links libdatachannel. JPEG-only Web builds do not
+`WEBRTC=OFF` neither fetches nor links libdatachannel. WebSocket-image builds do not
 need VIDEO or OpenH264. `RenderModuleWebRtc` is a private adapter DSO; installed
 RenderModule headers expose no libdatachannel types. See [licenses](third_party/WEBRTC_NOTICE.md).
 
@@ -101,7 +102,7 @@ Native codec/profile and ICE/DTLS fields remain unchanged. Firefox drops unknown
 fmtp fields during local SDP serialization, so the declaration is attached on the
 signaling wire. The server requires Level >=4.0 or that explicit higher receive
 level; `level-asymmetry-allowed=1` alone is insufficient. An unavailable/negative
-capability query fails visibly; use the explicit JPEG mode on older browsers.
+capability query fails visibly; use explicit WebSocket image mode on older browsers.
 No SPS rewriting or fictitious decoder capability is used.
 
 The browser uses `<video autoplay playsinline muted>`, with a manual Play button

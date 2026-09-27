@@ -80,22 +80,33 @@ bool ImagePresenter::ReadInto(const PresentedFrame& frame, unsigned char* data, 
     return true;
 }
 
-bool ImagePresenter::WritePng(const std::string& path, const ImageRgba& image) {
+bool ImagePresenter::EncodePng(const ImageRgba& image, std::vector<unsigned char>& output,
+                               std::size_t limit) {
     std::size_t bytes = 0;
-    if (path.empty() || !ImageSize(image.width, image.height, bytes) || image.pixels.size() != bytes)
-        return false;
+    if (!ImageSize(image.width,image.height,bytes) || image.pixels.size()!=bytes || !limit) return false;
     int length = 0;
     unsigned char* png = stbi_write_png_to_mem(const_cast<unsigned char*>(image.pixels.data()),
-        image.width*4, image.width, image.height, 4, &length);
-    if (!png) return false;
-    FILE* file = std::fopen(path.c_str(), "wb");
-    bool result = false;
-    if (file) {
-        result = std::fwrite(png, 1, length, file) == static_cast<std::size_t>(length);
-        result = (std::fclose(file) == 0) && result;
+        image.width*4,image.width,image.height,4,&length);
+    if (!png || length<=0 || static_cast<std::size_t>(length)>limit) {
+        std::free(png); return false;
     }
-    std::free(png);
-    if (!result) std::fprintf(stderr, "RenderModule: could not write PNG '%s'.\n", path.c_str());
+    std::vector<unsigned char> next;
+    try { next.assign(png,png+length); }
+    catch(const std::bad_alloc&) { std::free(png); return false; }
+    std::free(png);output=std::move(next);return true;
+}
+
+bool ImagePresenter::WritePng(const std::string& path, const ImageRgba& image) {
+    if(path.empty()) return false;
+    std::vector<unsigned char> png;
+    if(!EncodePng(image,png)) return false;
+    FILE* file=std::fopen(path.c_str(),"wb");
+    bool result=false;
+    if(file) {
+        result=std::fwrite(png.data(),1,png.size(),file)==png.size();
+        result=(std::fclose(file)==0) && result;
+    }
+    if(!result) std::fprintf(stderr,"RenderModule: could not write PNG '%s'.\n",path.c_str());
     return result;
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "presenter.hpp"
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -21,6 +22,10 @@ public:
     static bool Read(const PresentedFrame& frame, ImageRgba& image);
     // Caller-owned reusable storage, same one-flip/top-down and GL-state policy.
     static bool ReadInto(const PresentedFrame& frame, unsigned char* data, std::size_t capacity, int stride);
+    // Shared screenshot/WebSocket encoder. Preserves all RGBA8 channels and
+    // emits the already-upright rows without color-profile metadata.
+    static bool EncodePng(const ImageRgba& image, std::vector<unsigned char>& png,
+                          std::size_t limit = std::numeric_limits<std::size_t>::max());
     static bool WritePng(const std::string& path, const ImageRgba& image);
 private:
     std::string path_;

@@ -235,7 +235,7 @@ if(RENDER_MODULE_ENABLE_WEB)
         web/index.html web/app.mjs web/style.css web/input_protocol.mjs web/protocol_keys.mjs)
     configure_file(src/web/web_assets.cpp.in generated/web_assets.cpp @ONLY)
     target_sources(RenderModule PRIVATE src/web/web_protocol.cpp src/web/web_server.cpp
-        src/web/jpeg_encode.c src/present/web_presenter.cpp
+        src/web/image_encoder.cpp src/web/jpeg_encode.c src/present/web_presenter.cpp
         "${CMAKE_CURRENT_BINARY_DIR}/generated/web_assets.cpp")
     target_link_libraries(RenderModule PRIVATE Boost::system Boost::json JPEG::JPEG)
     execute_process(COMMAND git describe --always --dirty --exclude "*"
@@ -430,7 +430,7 @@ if(RENDER_MODULE_BUILD_TESTS)
         add_executable(RenderModuleWebTests tests/web_tests.cpp)
         target_include_directories(RenderModuleWebTests PRIVATE src)
         target_link_libraries(RenderModuleWebTests PRIVATE RenderModule::RenderModule Boost::system Boost::json Threads::Threads)
-        foreach(test protocol server jpeg)
+        foreach(test protocol server jpeg png)
             add_test(NAME web_${test} COMMAND ${CMAKE_COMMAND} -E env --unset=DISPLAY --unset=WAYLAND_DISPLAY
                 $<TARGET_FILE:RenderModuleWebTests> ${test})
             set_tests_properties(web_${test} PROPERTIES TIMEOUT 45 LABELS "web;headless")
@@ -471,6 +471,24 @@ if(RENDER_MODULE_BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/web/browser_test.mjs $<TARGET_FILE:RenderModuleWebFixture>
                 ${CMAKE_CURRENT_BINARY_DIR}/test-artifacts/web)
             set_tests_properties(web_chromium PROPERTIES TIMEOUT 120 LABELS "web;headless")
+            add_test(NAME web_chromium_png COMMAND ${CMAKE_COMMAND} -E env --unset=DISPLAY --unset=WAYLAND_DISPLAY
+                "RENDER_MODULE_TEST_PNG=1" "PLAYWRIGHT_BROWSERS_PATH=${RENDER_MODULE_BROWSER_CACHE}" ${RENDER_MODULE_NODE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/web/browser_test.mjs $<TARGET_FILE:RenderModuleWebFixture>
+                ${CMAKE_CURRENT_BINARY_DIR}/test-artifacts/web-png)
+            set_tests_properties(web_chromium_png PROPERTIES TIMEOUT 180 LABELS "web;png;headless")
+            add_test(NAME web_image_benchmark COMMAND ${CMAKE_COMMAND} -E env --unset=DISPLAY --unset=WAYLAND_DISPLAY
+                "PLAYWRIGHT_BROWSERS_PATH=${RENDER_MODULE_BROWSER_CACHE}" ${RENDER_MODULE_NODE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/web/image_benchmark.mjs $<TARGET_FILE:RenderModuleWebFixture>
+                ${CMAKE_CURRENT_BINARY_DIR}/test-artifacts/web-image-benchmark)
+            set_tests_properties(web_image_benchmark PROPERTIES TIMEOUT 240 LABELS "web;png;benchmark;headless")
+            if(RENDER_MODULE_BUILD_FIREFOX_TESTS)
+                add_test(NAME web_firefox_png COMMAND ${CMAKE_COMMAND} -E env --unset=DISPLAY --unset=WAYLAND_DISPLAY
+                    "RENDER_MODULE_TEST_PNG=1" "RENDER_MODULE_TEST_BROWSER=firefox"
+                    "PLAYWRIGHT_BROWSERS_PATH=${RENDER_MODULE_BROWSER_CACHE}" ${RENDER_MODULE_NODE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/web/browser_test.mjs $<TARGET_FILE:RenderModuleWebFixture>
+                    ${CMAKE_CURRENT_BINARY_DIR}/test-artifacts/web-png-firefox)
+                set_tests_properties(web_firefox_png PROPERTIES TIMEOUT 180 LABELS "web;png;headless")
+            endif()
             if(RENDER_MODULE_ENABLE_WEBRTC)
                 foreach(loss 0 1 3)
                     add_test(NAME webrtc_chromium_loss${loss} COMMAND ${CMAKE_COMMAND} -E env --unset=DISPLAY --unset=WAYLAND_DISPLAY

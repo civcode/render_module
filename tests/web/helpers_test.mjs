@@ -18,12 +18,15 @@ const text = 'äöüÄÖÜß 日本 🙂'.repeat(100), chunks = utf8Chunks(text)
 assert.equal(chunks.join(''), text);
 for (const chunk of chunks) assert.ok(new TextEncoder().encode(chunk).length <= 256);
 const data = new ArrayBuffer(31), h = new DataView(data);
-h.setUint32(0, 0x524d4a50); h.setUint16(4, 1); h.setUint16(6, 1); h.setBigUint64(8, 42n);
+h.setUint32(0,0x524d494d); h.setUint16(4,2); h.setUint16(6,1); h.setBigUint64(8,42n);
 h.setUint32(16, 640); h.setUint32(20, 480); h.setUint32(24, 3);
-assert.equal(parseFrame(data).id, '42');
+assert.deepEqual({...parseFrame(data),bytes:undefined},{id:'42',width:640,height:480,codec:'jpeg',mime:'image/jpeg',bytes:undefined});
+h.setUint16(6,2);assert.equal(parseFrame(data).mime,'image/png');h.setUint16(6,1);
 h.setBigUint64(8, 0xffffffffffffffffn);
 assert.equal(parseFrame(data).id, '18446744073709551615');
 for (const length of [0, 10, 27, 28, 30]) assert.throws(() => parseFrame(data.slice(0,length)));
 h.setUint32(24, 90000000); assert.throws(() => parseFrame(data));
-h.setUint32(24, 3); h.setUint16(4, 2); assert.throws(() => parseFrame(data));
+h.setUint32(24,3);h.setUint16(6,3);assert.throws(()=>parseFrame(data));
+h.setUint16(6,1);h.setUint16(4,1);assert.throws(()=>parseFrame(data));
+h.setUint16(4,2);h.setUint32(0,0x524d4a50);assert.throws(()=>parseFrame(data));
 console.log('Web JS helpers passed: letterboxing, capture, wheel, keys, UTF-8, malformed frames.');

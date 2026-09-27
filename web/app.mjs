@@ -22,12 +22,14 @@ export function protocolKey(code) {
     return keyByCode.get(code)?.name || null;
 }
 export function parseFrame(data) {
-    if (!(data instanceof ArrayBuffer) || data.byteLength < 28) throw Error('Truncated frame');
-    const h = new DataView(data), id = h.getBigUint64(8), width = h.getUint32(16), height = h.getUint32(20), size = h.getUint32(24);
-    if (h.getUint32(0) !== 0x524d4a50 || h.getUint16(4) !== 1 || h.getUint16(6) !== 1 ||
-        id < 1n || !width || !height || width > 2048 || height > 2048 ||
-        !size || size > 16 * 1024 * 1024 || data.byteLength !== size + 28) throw Error('Invalid frame');
-    return { id: id.toString(), width, height, jpeg: data.slice(28) };
+    if(!(data instanceof ArrayBuffer)||data.byteLength<28) throw Error('Truncated frame');
+    const h=new DataView(data),codec=h.getUint16(6),id=h.getBigUint64(8);
+    const width=h.getUint32(16),height=h.getUint32(20),size=h.getUint32(24);
+    if(h.getUint32(0)!==0x524d494d||h.getUint16(4)!==2||![1,2].includes(codec)||
+       id<1n||!width||!height||width>2048||height>2048||!size||size>16*1024*1024||
+       data.byteLength!==size+28) throw Error('Invalid frame');
+    return {id:id.toString(),width,height,codec:codec===1?'jpeg':'png',
+        mime:codec===1?'image/jpeg':'image/png',bytes:data.slice(28)};
 }
 export function utf8Chunks(text, maxBytes = 256) {
     const encoder = new TextEncoder(), out = []; let part = '', bytes = 0;
@@ -46,7 +48,7 @@ function start() {
     const connection = document.querySelector('#connection'), lease = document.querySelector('#lease');
     const diagnostics = document.querySelector('#diagnostics');
     const video = document.querySelector('#video'), play = document.querySelector('#play');
-    let transport = 'jpeg', pc = null, dataInput = null, signalChain = Promise.resolve(), remoteIce = [];
+    let transport='websocket-image', imageCodec='jpeg', pc=null, dataInput=null, signalChain=Promise.resolve(), remoteIce=[];
     function closePeer() {
         if (dataInput) { dataInput.close(); dataInput = null; }
         if (pc) { pc.ontrack = pc.onicecandidate = pc.onconnectionstatechange = pc.ondatachannel = null; pc.close(); pc = null; }
@@ -296,14 +298,16 @@ function start() {
         try {
             while (pending) {
                 const item = pending; pending = null;
-                const image = await createImageBitmap(new Blob([item.frame.jpeg], { type: 'image/jpeg' }));
+                const image=await createImageBitmap(new Blob([item.frame.bytes],{type:item.frame.mime}),
+                    {colorSpaceConversion:'none',premultiplyAlpha:'none'});
                 try {
                     if (socket !== item.socket || item.socket.readyState !== WebSocket.OPEN) continue;
-                    if (image.width !== item.frame.width || image.height !== item.frame.height) throw Error('JPEG dimensions mismatch');
+                    if(image.width!==item.frame.width||image.height!==item.frame.height) throw Error('Image dimensions mismatch');
                     if (!pending) {
                         frameWidth = image.width; frameHeight = image.height; canvas.width = frameWidth; canvas.height = frameHeight;
                         layout(); canvas.getContext('2d').drawImage(image, 0, 0);
-                        canvas.dataset.frameId = String(item.frame.id); canvas.dataset.width = String(frameWidth); canvas.dataset.height = String(frameHeight);
+                        canvas.dataset.frameId=String(item.frame.id);canvas.dataset.width=String(frameWidth);canvas.dataset.height=String(frameHeight);
+                        canvas.dataset.codec=item.frame.codec;
                         diagnostics.textContent = `${frameWidth}×${frameHeight} · frame ${item.frame.id}`;
                     }
                     send('frame_ack', { frameId: item.frame.id });
@@ -327,14 +331,17 @@ function start() {
                     if (event.data.length > 65536) throw Error('message size');
                     const message = JSON.parse(event.data); if (message.v !== 1) throw Error('version');
                     if (message.type === 'welcome') {
-                        connection.dataset.session = message.session; transport = message.transport || 'jpeg';
-                        if (!['jpeg', 'webrtc'].includes(transport) || message.inputTransport !==
-                            (transport === 'webrtc' ? 'datachannel-v1' : 'websocket-json-v1')) throw Error('transport');
-                        if (transport === 'jpeg') attempt = 0;
+                        connection.dataset.session=message.session; transport=message.transport||'websocket-image';
+                        imageCodec=message.imageCodec;
+                        const validCodec=transport==='webrtc'?imageCodec==='inactive':['jpeg','png'].includes(imageCodec);
+                        if(!['websocket-image','webrtc'].includes(transport)||!validCodec||
+                           message.inputTransport!==(transport==='webrtc'?'datachannel-v1':'websocket-json-v1')) throw Error('transport');
+                        if(transport==='websocket-image') attempt=0;
                         canvas.hidden = transport === 'webrtc'; video.hidden = transport !== 'webrtc';
-                        document.querySelector('#transport').textContent = transport === 'webrtc' ? 'WebRTC H.264 · DataChannel input' : 'DIAGNOSTIC JPEG/WebSocket';
+                        document.querySelector('#transport').textContent=transport==='webrtc'?'WebRTC H.264 · DataChannel input':
+                            `WebSocket ${imageCodec.toUpperCase()} image · WebSocket input`;
                         document.querySelector('#acquire-control').hidden = document.querySelector('#release-control').hidden = transport !== 'webrtc';
-                        setController(transport === 'jpeg' && message.control);
+                        setController(transport==='websocket-image'&&message.control);
                         if (transport === 'webrtc') signaling('hello');
                     }
                     if (['hello','offer','ice-candidate','ice-complete','webrtc-state','error'].includes(message.type)) {
@@ -343,15 +350,15 @@ function start() {
                             if (socket === current) { diagnostics.textContent = 'WebRTC negotiation failed; JPEG mode is available in server configuration.'; current.close(); }
                         }).finally(() => { --pendingSignals; });
                     }
-                    if (message.type === 'lease' && transport === 'jpeg') setController(message.control);
+                    if(message.type==='lease'&&transport==='websocket-image') setController(message.control);
                     if (message.type === 'view_only') setController(false);
                     if (message.type === 'input_reset') release();
                     if (message.type === 'viewport_accepted') {
                         display.dataset.width = String(message.width); display.dataset.height = String(message.height);
                     }
                 } else {
-                    if (transport === 'webrtc') throw Error('JPEG in WebRTC mode');
-                    const frame = parseFrame(event.data); if (BigInt(frame.id) <= lastId) throw Error('stale frame'); lastId = BigInt(frame.id);
+                    if(transport==='webrtc') throw Error('Image frame in WebRTC mode');
+                    const frame=parseFrame(event.data); if(frame.codec!==imageCodec) throw Error('Unexpected image codec'); if (BigInt(frame.id) <= lastId) throw Error('stale frame'); lastId = BigInt(frame.id);
                     pending = { frame, socket: current }; decode(); // One active decode, one replaceable pending frame.
                 }
             } catch { current.close(1002, 'Protocol error'); }

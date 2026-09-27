@@ -2,13 +2,13 @@
 
 **Transport boundary: owned H.264 access units, not networking.** The optional
 [Phase 7 adapter](WEBRTC.md) consumes this unchanged interface for WebRTC media.
-JPEG/WebSocket remains the explicit diagnostic transport. PBOs, hardware encoders
+JPEG/PNG WebSocket images remain the explicit diagnostic transport. PBOs, hardware encoders
 and congestion adaptation are not implemented.
 
 ```text
 RootFramebuffer → synchronous CPU Frame Capture (render thread, one flip)
                               /                 \
-                      JPEG prototype        VideoFrame (owned RGBA)
+                  JPEG/PNG diagnostics      VideoFrame (owned RGBA)
                                                     ↓ latest raw slot
                                            encoder worker: libyuv
                                                     ↓ I420
@@ -33,7 +33,7 @@ env -u DISPLAY -u WAYLAND_DISPLAY ctest --test-dir build-video -L video --output
 `RENDER_MODULE_ENABLE_VIDEO` defaults OFF. `RENDER_MODULE_ENABLE_OPENH264`
 selects the codec only when video is enabled; disabling it leaves conversion,
 frame types and the pipeline interface available (the OpenH264 factory returns
-null). Desktop, plain Headless and Web/JPEG-only builds fetch neither dependency.
+null). Desktop, plain Headless and WebSocket-image-only builds fetch neither dependency.
 Web and video can be independently enabled together.
 
 Immutable source pins in `cmake/Video.cmake` (OpenH264 archive verified by SHA-256;
@@ -117,13 +117,13 @@ even after the pool or codec has been destroyed.
 - Capture reuses `ImagePresenter::ReadInto()` and its **one CPU row flip**.
   libyuv receives positive height and upright pixels: no second inversion.
 - Encoded dimensions are even, **rounded down** by cropping only the final odd
-  column/row. RootFramebuffer/JPEG dimensions are not modified. Encoder sizes
+  column/row. RootFramebuffer/WebSocket-image dimensions are not modified. Encoder sizes
   must be 16–2048 on each axis; raw/converter layouts allow 1–2048. Oversized
   roots are rejected, not silently scaled/cropped to a different viewport.
 
-The original ImagePresenter allocation/read API still serves JPEG and PNG. Video
-uses its new caller-owned readback overload. **Simultaneously enabling JPEG and
-video currently performs separate synchronous readbacks** at their respective
+The original ImagePresenter allocation/read API serves JPEG/PNG WebSocket images
+and screenshots. Video uses its caller-owned readback overload. **Simultaneously
+enabling WebSocket images and video currently performs separate synchronous readbacks** at their respective
 cadences. This deliberately avoids rewriting the Phase 5 presenter; the capture
 implementation/state restoration/orientation are shared, not a cross-presenter
 cache. No asynchronous readback was introduced.

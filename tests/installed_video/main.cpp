@@ -4,7 +4,8 @@
 #include <cstring>
 #endif
 int main() {
-    if (RenderModule::IsInitialized()) return 1;
+    render_module::Config webConfig;webConfig.web.imageCodec=render_module::WebSocketImageCodec::Png;
+    if(webConfig.web.imageCodec!=render_module::WebSocketImageCodec::Png||RenderModule::IsInitialized()) return 1;
 #ifdef INSTALLED_VIDEO
     using namespace render_module::video;
     auto encoder=CreateOpenH264Encoder(); EncoderConfig config; config.width=config.height=32;

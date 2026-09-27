@@ -1,5 +1,6 @@
 #include "web/web_server.hpp"
 #include "web/jpeg_encode.h"
+#include "web/image_encoder.hpp"
 #include "render_module/render_module.hpp"
 #include "core/root_framebuffer.hpp"
 #include "present/image_presenter.hpp"
@@ -72,8 +73,9 @@ struct Client {
     std::uint64_t Frame() {
         for (int n = 0; n < 30; ++n) {
             bool binary; auto data = Read(binary); if (!binary) continue;
-            CHECK(data.size() >= 28 && std::memcmp(data.data(), "RMJP", 4) == 0);
-            std::uint64_t id = 0; for (int i = 8; i < 16; ++i) id = (id << 8) | data[i]; return id;
+            CHECK(data.size()>=28 && std::memcmp(data.data(),"RMIM",4)==0 && data[4]==0 && data[5]==2);
+            CHECK(data[6]==0 && (data[7]==1 || data[7]==2));
+            std::uint64_t id=0; for(int i=8;i<16;++i) id=(id<<8)|data[i]; return id;
         }
         throw std::runtime_error("missing frame");
     }
@@ -90,7 +92,9 @@ boost::json::object KeyMessage(bool down) {
 }
 void ServerTests() {
     auto queue = std::make_shared<RemoteInputQueue>(); WebConfig config; config.port = 0; config.authToken = token; config.maxClients = 3;
-    { auto bad = config; bad.bindAddress = "0.0.0.0"; bad.authToken.clear(); WebServer denied(bad, queue); CHECK(!denied.Start()); }
+    { auto bad=config; bad.bindAddress="0.0.0.0"; bad.authToken.clear(); WebServer denied(bad,queue); CHECK(!denied.Start()); }
+    { auto bad=config;bad.imageCodec=static_cast<render_module::WebSocketImageCodec>(99);WebServer denied(bad,queue);CHECK(!denied.Start()); }
+    { auto bad=config;bad.jpegQuality=0;WebServer denied(bad,queue);CHECK(!denied.Start()); }
     WebServer server(config, queue); CHECK(server.Start()); const auto port = server.Port(); CHECK(port);
     CHECK(Get(port, "/").result_int() == 200);
     CHECK(Get(port, "/app.js").body().find("normalizedPoint") != std::string::npos);
@@ -103,7 +107,8 @@ void ServerTests() {
     { Client bad; CHECK(!bad.Connect(port, false)); CHECK(bad.response.result_int() == 401); }
     { Client bad; CHECK(!bad.Connect(port, true, false)); CHECK(bad.response.result_int() == 403); }
     Client controller, viewer;
-    CHECK(controller.Connect(port)); auto welcome = controller.Until("welcome"); CHECK(welcome.at("control").as_bool());
+    CHECK(controller.Connect(port));auto welcome=controller.Until("welcome");CHECK(welcome.at("control").as_bool());
+    CHECK(welcome.at("transport")=="websocket-image" && welcome.at("imageCodec")=="jpeg");
     CHECK(welcome.at("session").as_string().size() == 32); CHECK(queue->TakeReleaseAll());
     CHECK(viewer.Connect(port)); auto watch = viewer.Until("welcome"); CHECK(!watch.at("control").as_bool());
     CHECK(watch.at("session") != welcome.at("session"));
@@ -119,11 +124,12 @@ void ServerTests() {
     for (int n = 0; n < 50; ++n)
         controller.Send({{"type", "viewport"}, {"width", 300+n}, {"height", 200+n}, {"devicePixelRatio", 1}});
     Wait([&] { return server.TakeViewport(requested) && requested.width == 349 && requested.height == 249; });
-    const unsigned char fakeJpeg[] = {0xff, 0xd8, 0xff, 0xd9};
-    server.Publish(std::make_shared<const std::vector<unsigned char>>(PackJpeg(1, 320, 200, fakeJpeg, 4)), 1);
+    EncodedImage fake; fake.codec=ImageCodec::Jpeg; fake.width=320; fake.height=200;
+    fake.bytes={0xff,0xd8,0xff,0xd9}; fake.frameId=1;
+    server.Publish(std::make_shared<const std::vector<unsigned char>>(PackImage(fake)),1);
     CHECK(controller.Frame() == 1);
     for (std::uint64_t id = 2; id <= 100; ++id)
-        server.Publish(std::make_shared<const std::vector<unsigned char>>(PackJpeg(id, 320, 200, fakeJpeg, 4)), id);
+        { fake.frameId=id; server.Publish(std::make_shared<const std::vector<unsigned char>>(PackImage(fake)),id); }
     std::this_thread::sleep_for(std::chrono::milliseconds(80));
     controller.Send({{"type", "frame_ack"}, {"frameId", 1}});
     CHECK(controller.Frame() == 100); CHECK(server.counters.dropped > 0);
@@ -150,11 +156,20 @@ void ServerTests() {
     }
     Client slow; CHECK(slow.Connect(port)); slow.Until("welcome");
     std::vector<unsigned char> large(1024*1024, 42);
-    server.Publish(std::make_shared<const std::vector<unsigned char>>(PackJpeg(101, 320, 200, large.data(), large.size())), 101);
+    fake.frameId=101;fake.bytes=std::move(large);
+    server.Publish(std::make_shared<const std::vector<unsigned char>>(PackImage(fake)),101);
     std::this_thread::sleep_for(std::chrono::milliseconds(40));
     const auto stopStart = std::chrono::steady_clock::now();
-    server.Stop(); CHECK(server.counters.sessions == 0);
-    CHECK(std::chrono::steady_clock::now()-stopStart < std::chrono::seconds(2));
+    server.Stop();CHECK(server.counters.sessions==0);
+    CHECK(std::chrono::steady_clock::now()-stopStart<std::chrono::seconds(2));
+    auto pngConfig=config;pngConfig.imageCodec=render_module::WebSocketImageCodec::Png;pngConfig.jpegQuality=0;
+    WebServer pngServer(pngConfig,queue);CHECK(pngServer.Start());Client pngClient;CHECK(pngClient.Connect(pngServer.Port()));
+    const auto pngWelcome=pngClient.Until("welcome");CHECK(pngWelcome.at("imageCodec")=="png");
+    EncodedImage png;png.codec=ImageCodec::Png;png.frameId=1;png.width=32;png.height=24;
+    png.bytes={0x89,'P','N','G',0x0d,0x0a,0x1a,0x0a};
+    pngServer.Publish(std::make_shared<const std::vector<unsigned char>>(PackImage(png)),1);CHECK(pngClient.Frame()==1);
+    const auto pngMetrics=boost::json::parse(Get(pngServer.Port(),"/api/version",true).body()).as_object();
+    CHECK(pngMetrics.at("image_codec")=="png");pngClient.Close();pngServer.Stop();
 }
 #ifdef WEBRTC_TEST
 void SignalingTests() {
@@ -165,7 +180,7 @@ void SignalingTests() {
     { Client bad; CHECK(!bad.Connect(port,false)); CHECK(bad.response.result_int()==401); }
     { Client bad; CHECK(!bad.Connect(port,true,false)); CHECK(bad.response.result_int()==403); }
     Client owner; CHECK(owner.Connect(port)); const auto welcome=owner.Until("welcome");
-    CHECK(welcome.at("transport")=="webrtc"); const auto ownerId=welcome.at("session");
+    CHECK(welcome.at("transport")=="webrtc" && welcome.at("imageCodec")=="inactive"); const auto ownerId=welcome.at("session");
     owner.Send({{"type","hello"},{"session",ownerId}});owner.Until("hello");owner.Until("offer");
     CHECK(queue->TakeReleaseAll());
     // Seed the existing input queue to check cancellation isolation. WebRTC WS input is forbidden.
@@ -226,9 +241,65 @@ void ProtocolTests() {
     signal["type"]="answer";signal["sdp"]=std::string(32769,'a');CHECK(!ParseWebMessage(boost::json::serialize(signal),config,state,result));
     signal["sdp"]="valid-size";CHECK(ParseWebMessage(boost::json::serialize(signal),config,state,result));
     signal["session"]=std::string(32,'G');CHECK(!ParseWebMessage(boost::json::serialize(signal),config,state,result));
-    const unsigned char bytes[] = {1,2,3}; auto packet = PackJpeg(0x0102030405060708ULL, 640, 480, bytes, 3);
-    CHECK(packet.size() == 31 && packet[8] == 1 && packet[15] == 8 && packet[24] == 0 && packet[27] == 3);
-    CHECK(PackJpeg(0, 640, 480, bytes, 3).empty());
+    EncodedImage encoded;encoded.codec=ImageCodec::Jpeg;encoded.frameId=0x0102030405060708ULL;
+    encoded.width=640;encoded.height=480;encoded.bytes={1,2,3};auto packet=PackImage(encoded);
+    CHECK(packet.size()==31 && std::memcmp(packet.data(),"RMIM",4)==0 && packet[5]==2 && packet[7]==1 &&
+          packet[8]==1 && packet[15]==8 && packet[24]==0 && packet[27]==3);
+    encoded.codec=ImageCodec::Png;packet=PackImage(encoded);CHECK(packet[7]==2);
+    CHECK(std::string(ImageCodecName(ImageCodec::Png))=="png" && std::string(ImageCodecMime(ImageCodec::Png))=="image/png");
+    encoded.codec=static_cast<ImageCodec>(99);CHECK(PackImage(encoded).empty());
+    encoded.codec=ImageCodec::Jpeg;encoded.frameId=0;CHECK(PackImage(encoded).empty());
+    encoded.frameId=1;encoded.bytes.resize(WebFrameLimit+1);CHECK(PackImage(encoded).empty());
+}
+void PngTests() {
+    ImageRgba pattern; pattern.width=67;pattern.height=53;pattern.pixels.resize(std::size_t(pattern.width)*pattern.height*4);
+    for(int y=0;y<pattern.height;++y) for(int x=0;x<pattern.width;++x) {
+        auto* p=&pattern.pixels[(std::size_t(y)*pattern.width+x)*4];
+        p[0]=static_cast<unsigned char>((x*255)/(pattern.width-1));
+        p[1]=static_cast<unsigned char>((y*255)/(pattern.height-1));
+        p[2]=static_cast<unsigned char>(((x^y)&1)?255:0);
+        p[3]=static_cast<unsigned char>((x+y)%5?255:(x*3+y*5)&255);
+        if(x<8&&y<8) { const unsigned char colors[][4]={{0,0,0,0},{255,255,255,255},{255,0,0,128},{0,255,0,64},{0,0,255,255}};
+            std::memcpy(p,colors[(x+y)%5],4); }
+    }
+    ImageEncoder encoder(render_module::WebSocketImageCodec::Png,80,WebFrameLimit);EncodedImage encoded;
+    for(std::uint64_t id=1;id<=20;++id) {
+        CHECK(encoder.Encode(pattern,id,encoded));CHECK(encoded.codec==ImageCodec::Png && encoded.frameId==id);
+        const unsigned char signature[]={0x89,'P','N','G',0x0d,0x0a,0x1a,0x0a};
+        CHECK(encoded.bytes.size()>32 && std::memcmp(encoded.bytes.data(),signature,8)==0);
+        int w=0,h=0,channels=0;auto* decoded=stbi_load_from_memory(encoded.bytes.data(),int(encoded.bytes.size()),&w,&h,&channels,4);
+        CHECK(decoded && w==pattern.width && h==pattern.height &&
+              std::memcmp(decoded,pattern.pixels.data(),pattern.pixels.size())==0);
+        stbi_image_free(decoded);
+    }
+    // stb emits only signature/IHDR/IDAT/IEND: no profile/gamma chunks that can transform samples.
+    std::size_t offset=8;std::vector<std::string> chunks;
+    while(offset+12<=encoded.bytes.size()) {
+        const auto length=(std::uint32_t(encoded.bytes[offset])<<24)|(std::uint32_t(encoded.bytes[offset+1])<<16)|
+            (std::uint32_t(encoded.bytes[offset+2])<<8)|encoded.bytes[offset+3];
+        CHECK(offset+12+length<=encoded.bytes.size());chunks.emplace_back(reinterpret_cast<const char*>(encoded.bytes.data()+offset+4),4);
+        offset+=12+length;
+    }
+    CHECK(chunks.size()==3 && chunks[0]=="IHDR" && chunks[1]=="IDAT" && chunks[2]=="IEND");
+    ImageRgba invalid;std::vector<unsigned char> bytes{1};CHECK(!ImagePresenter::EncodePng(invalid,bytes));
+    ImageEncoder tiny(render_module::WebSocketImageCodec::Png,80,8);CHECK(!tiny.Encode(pattern,1,encoded));
+    ImageRgba noise;noise.width=1920;noise.height=1080;noise.pixels.resize(std::size_t(noise.width)*noise.height*4);
+    std::uint32_t random=1;for(auto& byte:noise.pixels){random=random*1664525u+1013904223u;byte=static_cast<unsigned char>(random>>24);}
+    CHECK(encoder.Encode(noise,22,encoded) && encoded.bytes.size()<WebFrameLimit);
+    noise.width=noise.height=2048;noise.pixels.resize(std::size_t(noise.width)*noise.height*4);
+    for(auto& byte:noise.pixels){random=random*1664525u+1013904223u;byte=static_cast<unsigned char>(random>>24);}
+    CHECK(!encoder.Encode(noise,23,encoded));
+    // Actual root readback uses the same sole flip as screenshots and must round-trip exactly.
+    render_module::Config config;config.backend=render_module::Backend::Headless;config.headlessContext=render_module::HeadlessContext::NativeEgl;
+    config.width=128;config.height=96;CHECK(RenderModule::Init(config));RootFramebuffer root;CHECK(root.Resize(64,48));root.BeginFrame();
+    glDisable(GL_SCISSOR_TEST);glClearColor(0,0,1,.25f);glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_SCISSOR_TEST);glScissor(0,24,64,24);glClearColor(1,0,0,1);glClear(GL_COLOR_BUFFER_BIT);glDisable(GL_SCISSOR_TEST);
+    const auto now=std::chrono::steady_clock::now();const auto frame=root.Complete(1,now,now);ImageRgba actual;CHECK(ImagePresenter::Read(frame,actual));
+    CHECK(encoder.Encode(actual,21,encoded));int w=0,h=0,channels=0;
+    auto* decoded=stbi_load_from_memory(encoded.bytes.data(),int(encoded.bytes.size()),&w,&h,&channels,4);
+    CHECK(decoded && w==64 && h==48 && std::memcmp(decoded,actual.pixels.data(),actual.pixels.size())==0);
+    CHECK(decoded[(5*64+32)*4]==255 && decoded[(42*64+32)*4+2]==255);stbi_image_free(decoded);
+    root.Destroy();RenderModule::Shutdown();
 }
 void JpegTests() {
     render_module::Config config; config.backend = render_module::Backend::Headless;
@@ -273,6 +344,7 @@ int main(int argc, char** argv) {
 #ifdef WEBRTC_TEST
         else if (std::strcmp(argv[1], "signaling") == 0) SignalingTests();
 #endif
+        else if(std::strcmp(argv[1],"png")==0) PngTests();
         else JpegTests();
         std::cout << "Web tests passed.\n"; return 0;
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; RenderModule::Shutdown(); return 1; }

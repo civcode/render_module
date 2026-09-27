@@ -1,10 +1,10 @@
-# Web backend — protocol v1
+# Web backend — JSON protocol v1 / image protocol v2
 
-JPEG/WebSocket remains the explicit **diagnostic transport**. Optional [Phase 7
-WebRTC](WEBRTC.md) supplies H.264 media; [Phase 8](INPUT_PROTOCOL.md) moves its input,
-controller operations and viewport negotiation onto DataChannels. Authentication
-and WS signaling remain shared. The JSON input/JPEG protocol below applies only
-to diagnostic JPEG mode and is unchanged. PBOs and hardware encoding are not present.
+JPEG/PNG WebSocket images are the explicit **diagnostic transport**. Optional
+[WebRTC](WEBRTC.md) supplies H.264 media; [DataChannel input](INPUT_PROTOCOL.md) applies
+to that mode only. Authentication and WS signaling remain shared. The JSON input
+protocol below applies to WebSocket image mode with either codec. PNG is not a WebRTC
+codec. PBOs and hardware encoding are not present.
 
 ## Dependencies and packaging
 
@@ -12,8 +12,9 @@ Boost.Beast/Asio provide asynchronous HTTP and WebSocket support: maintained,
 permissively licensed, explicit upgrade inspection, binary messages, size limits,
 and clear asynchronous ownership. Boost.JSON handles strict JSON/UTF-8 parsing.
 Boost >=1.75 is required (tested: Ubuntu Boost 1.83). `JPEG::JPEG` supplies the
-libjpeg encoder API (tested: libjpeg-turbo 2.1.5). See
-[WEB_NOTICE.md](third_party/WEB_NOTICE.md). No external encoder process is used.
+libjpeg encoder API (tested: libjpeg-turbo 2.1.5). PNG reuses the public-domain
+`stb_image_write` already pinned through NanoVG for `SaveScreenshot()`; no new
+library, process or temporary file is used. See [WEB_NOTICE.md](third_party/WEB_NOTICE.md).
 
 All HTTP-library types are confined to `src/web/`. The assets in `web/`
 are embedded into the library by CMake, including installed builds. No disk asset
@@ -21,8 +22,8 @@ root, Node.js, npm, or browser framework is needed at runtime.
 
 ## Threads and lifetime
 
-- **Render thread:** all GL/ImGui/Canvas/View3D calls, root resize, synchronous
-  `ImagePresenter::Read()`, JPEG encoding and immutable packet publication.
+- **Render thread:** all GL/ImGui/Canvas/View3D calls, root resize, one synchronous
+  `ImagePresenter::Read()`, selected JPEG/PNG encoding and immutable packet publication.
 - **One network thread:** HTTP, WebSocket, JSON validation, controller ownership
   and enqueue into the existing Phase 4 `RemoteInputQueue`. No GL/ImGui calls.
 - Shared bridges are a latest-frame mailbox, latest-viewport-request mailbox,
@@ -69,40 +70,48 @@ against non-browser clients. Security headers include `nosniff`, `no-referrer`,
 
 ## Frames and bounds
 
-Binary message header: **28 bytes, all integers big-endian**, followed immediately
-by JPEG bytes. No base64 or JSON image payloads.
+Image-frame protocol **v2** uses a 28-byte header, all integers big-endian, followed
+immediately by encoded bytes. Server and embedded browser upgrade together; v1
+`RMJP` frames are intentionally rejected rather than reinterpreting its type field.
+JSON control/signaling remains protocol v1. No base64 or MIME string is sent per frame.
 
 | Offset | Field |
 |---:|---|
-| 0 | u32 magic `0x524d4a50` (`RMJP`) |
-| 4 | u16 version `1` |
-| 6 | u16 message type `1` (JPEG) |
+| 0 | u32 magic `0x524d494d` (`RMIM`) |
+| 4 | u16 image protocol version `2` |
+| 6 | u16 codec: `1` JPEG, `2` PNG |
 | 8 | u64 monotonically increasing root frame ID |
 | 16 | u32 width |
 | 20 | u32 height |
-| 24 | u32 JPEG payload size |
+| 24 | u32 encoded payload size |
 
-RGBA8 readback reuses Phase 3's **single CPU vertical flip**. The encoder drops
-alpha and consumes top-origin RGB rows; browser decoding does not flip again.
-JPEG is lossy and does not replace the Phase 3 PNG golden test.
+RGBA8 readback reuses Phase 3's **single CPU vertical flip**. Both encoders consume
+that same tightly-packed, top-origin frame; browser decoding never flips. JPEG drops
+alpha and is lossy. PNG writes RGBA8 losslessly, including alpha. Its stb output has
+only signature, `IHDR`, `IDAT`, `IEND`: no `sRGB`, `gAMA`, `cHRM`, ICC or text chunk.
+The browser selects `image/jpeg` or `image/png` from the codec enum and requests no
+color-space conversion in `createImageBitmap()`.
 
-- Defaults: JPEG quality 80, capture ceiling 20 fps, max viewport 1920×1080,
-  eight WebSocket clients. Configuration permits 1–30 fps, quality 1–100,
-  dimensions <=2048 per axis, and 1–32 clients. Initial `Config.width/height`
-  must fit the configured maxima. Port 0 is supported for ephemeral test servers.
-- No viewers: no readback/JPEG encoding. The core may keep rendering normally.
+- Defaults: codec JPEG, JPEG quality 80, capture ceiling 20 fps, max viewport
+  1920×1080, eight WebSocket clients. Configuration permits 1–30 fps, JPEG quality
+  1–100, dimensions <=2048 per axis, and 1–32 clients. PNG ignores `jpegQuality`.
+  Initial `Config.width/height` must fit maxima. Port 0 supports ephemeral tests.
+- No viewers: no readback/image encoding. The core may keep rendering normally.
 - One global replaceable packet; per session **one in-flight write plus one
   replaceable latest pending frame**. Packet storage is shared and immutable.
-  The encoder's owned destination grows only up to 16 MiB; it safely rejects
-  overflow even after reallocation. Already-transmitting frames cannot be
-  unsent; queued older frames are replaced by the latest available ID.
+  Encoded payloads are limited to **16 MiB**. This comfortably bounds worst-case
+  configured 1920×1080 RGBA PNGs; pathological larger/incompressible output is
+  dropped without publication. JPEG's destination also refuses growth past the
+  limit. Already-transmitting frames cannot be unsent; queued older frames are
+  replaced by the latest available ID.
 - Client must acknowledge a decoded/displayed frame with `frame_ack`. Only one
   unacknowledged frame is transmitted per client. Five-second ACK/write deadlines
   evict slow clients. At most 16 small control messages queue per session; overflow
   closes it. Socket send buffers are requested at 64 KiB (OS bookkeeping varies).
 - Browser stores one active decode and one replaceable pending frame. It checks
-  magic/version/type, exact length, dimensions, monotonic ID and decoded JPEG
-  dimensions. Browser WebSocket output above 64 KiB triggers reconnect/recovery.
+  magic/version/codec, exact length, dimensions, monotonic ID, selected welcome
+  codec and decoded image dimensions. Unknown codec/version closes the session.
+  Browser WebSocket output above 64 KiB triggers reconnect/recovery.
 - Incoming messages: 8 KiB, JSON depth <=8, at most 1000 messages/second/session.
   HTTP headers/bodies each <=8 KiB, request deadline five seconds, TCP connections
   <=4×`maxClients`. WebSocket upgrades count toward the client limit while pending.
@@ -148,9 +157,10 @@ not transactional and should be retried by the user if recovery is reported.
 
 ## WebRTC signaling (Phase 7)
 
-`welcome` adds `transport: "jpeg" | "webrtc"` and `inputTransport:
-"websocket-json-v1" | "datachannel-v1"`, respectively. In WebRTC mode there are no
-JPEG binary frames or frame ACKs; WS input is rejected, even from the controller. The same authenticated, Origin-validated `/api/ws`
+`welcome` adds `transport: "websocket-image" | "webrtc"`, `imageCodec: "jpeg" |
+"png"`, and `inputTransport: "websocket-json-v1" | "datachannel-v1"`. In WebRTC
+mode `imageCodec` is inactive: there are no image frames or frame ACKs; WS input is
+rejected, even from the controller. The same authenticated, Origin-validated `/api/ws`
 connection carries signaling; there is no unauthenticated signaling endpoint.
 Every signaling message has `v:1`, `type`, and the owning 32-hex `session` ID.
 Client signaling messages use their own increasing `seq`. Viewers may
@@ -167,8 +177,8 @@ negotiate their own media but may not send input/resize or target another sessio
 | `webrtc-state` | server → client | `state`: New/Checking/Connected/Completed/Disconnected/Failed/Closed |
 | `error` | server → client | Credential-free `code`, e.g. `negotiation_failed` or `media_failed`; session closes |
 
-Signaling envelopes <=64 KiB; SDP <=32 KiB; candidate <=1024 bytes. JPEG-mode JSON
-input retains its 8 KiB limit; DataChannel packets have a separate 512-byte limit. At most 128 signaling messages/second, within the existing
+Signaling envelopes <=64 KiB; SDP <=32 KiB; candidate <=1024 bytes. WebSocket-image
+JSON input retains its 8 KiB limit; DataChannel packets have a separate 512-byte limit. At most 128 signaling messages/second, within the existing
 1000-message total; 64 remote candidates/session, <=96 queued media signals and
 <=16 WS controls. Early candidates wait for the answer. Duplicate hello/answer/
 completion, stale sequence/session, unsupported SDP, wrong media direction/type,
@@ -213,27 +223,30 @@ lease, viewport and snapshot are established; old authority is never assumed.
 fits CSS dimensions into configured maxima, flooring to pixels (minimum one).
 Only the controller may resize. Unconsumed requests are canceled when its lease
 ends. Requests coalesce before transactional root resize; `viewport_accepted` reports observed completed-root dimensions, not an
-uncommitted allocation. Frame headers always describe their own JPEG. A prior
+uncommitted allocation. Frame headers always describe their own codec and dimensions. A prior
 in-flight image may finish during resize; mapping follows the displayed image.
 
 ## Diagnostics and tests
 
-Authenticated `/api/version` exposes connected sessions/controller presence,
-rendered/encoded/dropped frames, WebSocket payload bytes, accepted/rejected input,
-queue-full count, cumulative readback/encode/pack microseconds and current viewport.
-Drop counts include global/per-viewer replacement (not unique lost frame IDs).
-No full metrics system or adaptive scheduling is implemented.
+Authenticated `/api/version` exposes `image_codec`, generic encoded/dropped frame
+and encoded-byte totals, mean `jpeg_encode_ms`/`png_encode_ms`, legacy JPEG counters,
+WebSocket payload bytes, accepted/rejected input, queue-full count, cumulative
+readback/encode/pack microseconds and current viewport. Drop counts include
+encode/size rejection and global/per-viewer replacement (not unique frame IDs).
+No adaptive scheduling is implemented.
 
 C++ tests cover HTTP/auth/origin/limits, controller denial/promotion, saturation,
 rapid resize mailboxes/connect-disconnect, slow-client latest-frame behavior and
 bounded shutdown; JPEG tests decode orientation, reject expired root frames and
-force output-cap failures before/after buffer growth. Readback/codec failures stop
+force output-cap failures before/after buffer growth. PNG tests independently decode
+exact RGBA/alpha, orientation, chunks, repetition, limits and resize. Readback failures stop
 the render loop with diagnostics rather than publish partial packets.
 Chromium E2E checks real ImGui/Canvas/View3D pixels, clicks, orbit/zoom, Unicode,
 clipboard paste, synthetic CJK composition, capture, resizing, viewers, blur and
 reconnect without a final keyup. Synthetic composition is not OS-IME coverage.
 Artifacts include `browser.png`/`failure.png`, fixture state, server log and
-`metrics.json`. Firefox and real OS/mobile IMEs remain unverified in this phase.
+`metrics.json`. Chromium and Firefox PNG E2E use the same DOM/canvas/input path.
+Real OS/mobile IMEs remain unverified.
 
 ### Phase 5 validation snapshot
 
@@ -250,7 +263,7 @@ unset both `DISPLAY` and `WAYLAND_DISPLAY`.
 
 All six examples build in each configuration. Web demo smoke runs succeed with
 both headless providers. The Phase 3 PNG golden has zero channel/pixel error;
-Phase 4 queue/input and Desktop presentation regressions pass. Server, JPEG and
+Phase 4 queue/input and Desktop presentation regressions pass. Server, JPEG, PNG and
 Chromium tests also passed three consecutive repeats. The JPEG C wrapper was
 additionally AddressSanitizer-instrumented for its existing success/cap-failure
 suite (leak detection disabled for the GL integration process).
@@ -264,8 +277,27 @@ A two-second fixture observation at 1000×696: **19.97 JPEG fps**, **30.96% of o
 CPU core** for the server/renderer process, **2.05 ms** average synchronous
 readback/encode/pack. This is a diagnostic sample, not a general performance
 benchmark; browser CPU is excluded and fixture state-file reporting is included.
-NVIDIA hardware, Firefox and real OS IME remain unverified. These counts describe
-the Phase 5 checkpoint; Phase 6 validation is documented separately.
+NVIDIA hardware, Firefox and real OS IME were unverified at that checkpoint. These
+counts describe Phase 5; Phase 6 validation is documented separately.
+
+### JPEG/PNG comparison
+
+Release, Chromium 153, Mesa llvmpipe on Ryzen 9 9950X; 1.5-second samples, browser
+CPU excluded. `meanEncodeMs` includes synchronous readback, encoding and packet
+construction. Static and representative ImGui/ImPlot/NanoVG/View3D scenes were
+measured; representative values are:
+
+| Size | JPEG fps / ms / bytes | PNG fps / ms / bytes |
+|---|---:|---:|
+| 1000×700 | 19.97 / 1.93 / 37,739 | 19.96 / 39.79 / 37,189 |
+| 1280×720 | 20.63 / 2.66 / 41,089 | 17.32 / 54.93 / 46,150 |
+| 1920×1080 | 19.98 / 5.16 / 59,329 | 7.99 / 122.87 / 91,621 |
+
+Static PNG sizes were 33,625 / 42,487 / 87,993 bytes; JPEG 30,391 / 33,702 /
+51,942. PNG used ~102.5%, 112.6%, 107.8% of one logical CPU for the representative
+sizes versus JPEG ~30.0%, 33.9%, 45.3%. These low-motion samples are not throughput
+ceilings; PNG is deliberately not the realtime default. Raw artifacts are
+`test-artifacts/web-image-benchmark/metrics.json`.
 
 References: [Beast async server example](https://github.com/boostorg/beast/blob/boost-1.83.0/example/websocket/server/async/websocket_server_async.cpp),
 [write ownership](https://www.boost.org/doc/libs/1_83_0/libs/beast/doc/html/beast/ref/boost__beast__websocket__stream/async_write.html),

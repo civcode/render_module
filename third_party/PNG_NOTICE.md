@@ -8,7 +8,8 @@ Author: Sean Barrett (2010). The header explicitly dedicates this code to the
 **public domain**, with no warranty. Source and notice:
 https://github.com/memononen/nanovg/blob/ce3bf745eb2d2dbc14a50bf2446783f691ac4353/example/stb_image_write.h
 
-Only its in-memory PNG encoder is used. RenderModule checks file writes/closes,
-bounds diagnostic captures to 256 MiB RGBA, and performs the sole output row flip
-before encoding. The test PNG decoder is NanoVG's existing `stb_image.h` (also
+Only its in-memory PNG encoder is used, shared by screenshot files and WebSocket
+PNG images. RenderModule checks file writes/closes, bounds diagnostic capture RGBA
+to 256 MiB and WebSocket encoded payloads to 16 MiB, and performs the sole output
+row flip before encoding. The test PNG decoder is NanoVG's existing `stb_image.h` (also
 public domain); it decodes locally generated/trusted golden images only.

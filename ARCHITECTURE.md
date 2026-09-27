@@ -57,7 +57,7 @@ platform responsibilities. Public headers contain no GLFW/EGL/Magnum types.
   IME hooks are not provided; the optional Web client handles committed text.
 - Existing Canvas and View3D FBOs feed the same root UI composition as Desktop.
   Headless dimensions come from `Config`, never the native pbuffer size.
-  The optional Web presenter adds HTTP/JPEG delivery without changing rendering.
+  The optional Web presenter adds HTTP with JPEG/PNG WebSocket images without changing rendering.
 
 ### Magnum loader
 
@@ -92,7 +92,7 @@ RootFramebuffer (RGBA8)
 Presenter
     ├ DesktopPresenter → blit to default framebuffer → swap
     ├ ImagePresenter   → optional synchronous readback → PNG
-    └ WebPresenter     → synchronous readback → JPEG/WS (diagnostic) or VideoPipeline/WebRTC
+    └ WebPresenter     → synchronous readback → JPEG|PNG/WS (diagnostic) or VideoPipeline/WebRTC
 ```
 
 `src/core/root_framebuffer.*` owns a single-sample `GL_RGBA8` color texture/FBO,
@@ -247,9 +247,11 @@ and [Unicode configuration](https://github.com/ocornut/imgui/blob/v1.91.9b-docki
 ## Embedded Web UI (Phase 5)
 
 ```text
-RootFramebuffer → WebPresenter → ImagePresenter::Read → libjpeg → immutable packet
-                                                                  ↓
-Browser canvas ← JPEG binary WebSocket ← WebServer (one Asio network thread)
+RootFramebuffer → WebPresenter → ImagePresenter::Read (one top-down RGBA frame)
+                                           ↓
+                                ImageEncoder (JPEG | PNG)
+                                           ↓
+Browser canvas ← binary WebSocket image ← shared WebServer/session/backpressure
 Browser input → JSON WebSocket → controller/validation → RemoteInputQueue
                                                             ↓ render thread
                                                     RemoteInputBackend → ImGui
@@ -257,8 +259,9 @@ Browser input → JSON WebSocket → controller/validation → RemoteInputQueue
 
 `Backend::Web` selects an existing headless provider, the existing input backend,
 and `WebPresenter`. `IPresenter::PrepareFrame()` consumes the latest viewport
-request at a render boundary; normal rendering is otherwise unchanged. JPEG
-readback/encoding is synchronous and capped independently of render fps. No GL
+request at a render boundary; normal rendering is otherwise unchanged. Selected-codec
+readback/encoding is synchronous and capped independently of render fps. JPEG and PNG
+share the one readback, packet mailbox, ACK and session code. No GL
 work or borrowed framebuffer handle crosses into the network thread.
 
 Boost.Beast/Asio and Boost.JSON stay private in `src/web/`; the presenter does not
@@ -269,8 +272,8 @@ validation are server-enforced. Controller loss/saturation invokes Phase 4's
 release-all cancellation barrier; no alternate ImGui or camera path is introduced.
 
 See [WEB_PROTOCOL.md](WEB_PROTOCOL.md) for protocol v1, explicit bounds, security,
-viewport negotiation, input details, diagnostics and test coverage. **JPEG/WS is
-an explicit diagnostic transport**; Phase 7 adds optional WebRTC media. Phase 6
+viewport negotiation, input details, diagnostics and test coverage. **JPEG/PNG WS is
+an explicit diagnostic image transport**; Phase 7 adds optional WebRTC media. Phase 6
 software video remains transport-independent. Phase 8 adds DataChannel input;
 PBOs and hardware encoding are not implemented.
 
@@ -279,7 +282,7 @@ PBOs and hardware encoding are not implemented.
 ```text
 RootFramebuffer → CPU Frame Capture (render thread; synchronous, one flip)
                       /                         \
-                 JPEG prototype            owned RGBA VideoFrame
+              JPEG/PNG diagnostic           owned RGBA VideoFrame
                                                     ↓ latest slot
                                              VideoConverter (worker)
                                                     ↓ I420 / BT.709 limited
@@ -301,7 +304,7 @@ One pending raw frame is replaceable; one encoded output slot applies backpressu
 Dependent P access units are not arbitrarily dropped. Resolution commands invalidate
 old pending/output data and suppress old in-flight completion before recreating the
 codec and producing an IDR. All GL remains on the render thread; shutdown needs no
-GL context on the worker. JPEG's transport/presenter remains unchanged; when both
+GL context on the worker. WebSocket image transport remains independent; when both
 outputs are active, their synchronous readbacks currently remain separate.
 
 See [VIDEO_PIPELINE.md](VIDEO_PIPELINE.md) for precise color/framing/timebase,
@@ -310,7 +313,7 @@ through WebSocket.
 
 ## WebRTC media (Phase 7)
 
-`WebPresenter` selects either JPEG or an owned Phase 6 pipeline/capture bridge.
+`WebPresenter` selects either WebSocket image encoding (JPEG/PNG) or an owned Phase 6 pipeline/capture bridge.
 A CPU fanout worker drains complete access units, copies each once to release the
 encoder pool, then shares immutable storage across sessions. Every session owns a
 PeerConnection, send-only H.264 track, packetizer, SSRC, RTP clock/sequence, bounded
@@ -341,7 +344,7 @@ Reliable absolute positions and fast-sequence fences prevent late moves rewindin
 clicks or snapshots. Queue failure invokes ReleaseAll and an epoch-tagged resync;
 controller transfer always requires a fresh snapshot. Browser motion has one
 replaceable unsent slot, while reliable queues are bounded and fail closed.
-Explicit JPEG mode retains WS input; there is no production dual-input path.
+Explicit WebSocket image mode retains WS input; there is no production dual-input path.
 See [INPUT_PROTOCOL.md](INPUT_PROTOCOL.md) for the wire table, authority, deadlines,
 backpressure, RTT diagnostics and tests. **Phase 9/PBO readback remains unstarted.**
 

@@ -1,4 +1,4 @@
-import {chromium} from 'playwright';
+import {chromium,firefox} from 'playwright';
 import assert from 'node:assert/strict';
 import {spawn, execFileSync} from 'node:child_process';
 import fs from 'node:fs/promises';
@@ -20,7 +20,8 @@ async function until(fn, label, ms = 12000) {
     throw Error(`Timeout: ${label}`);
 }
 async function state() { return JSON.parse(await fs.readFile(statePath, 'utf8')); }
-const token = '0123456789abcdef0123456789abcdef';
+const token='0123456789abcdef0123456789abcdef',codec=process.env.RENDER_MODULE_TEST_PNG?'png':'jpeg';
+const isFirefox=process.env.RENDER_MODULE_TEST_BROWSER==='firefox';
 let origin;
 const browserErrors = [], pageErrors = [];
 try {
@@ -30,9 +31,9 @@ try {
     const authHeaders = {Authorization: `Bearer ${token}`};
     const metrics = async () => (await fetch(origin + '/api/version', {headers: authHeaders})).json();
     assert.equal((await fetch(origin + '/api/version')).status, 401);
-    assert.equal((await metrics()).jpegEncoded, 0, 'No viewers: no JPEG encoding');
-    browser = await chromium.launch({headless: true, args: ['--no-sandbox', '--disable-gpu', '--no-proxy-server']});
-    const context = await browser.newContext({viewport: {width: 900, height: 700}, permissions: ['clipboard-read', 'clipboard-write']});
+    assert.equal((await metrics()).image_frames_encoded,0,'No viewers: no image encoding');
+    browser=await (isFirefox?firefox:chromium).launch({headless:true,...(!isFirefox?{args:['--no-sandbox','--disable-gpu','--no-proxy-server']}: {})});
+    const context=await browser.newContext({viewport:{width:900,height:700},...(!isFirefox?{permissions:['clipboard-read','clipboard-write']}: {})});
     page = await context.newPage();
     page.on('pageerror', error => { pageErrors.push(String(error)); browserErrors.push(String(error)); });
     page.on('console', message => { if (message.type() === 'error') browserErrors.push(message.text()); });
@@ -41,7 +42,8 @@ try {
     await until(() => page.locator('#connection').textContent().then(t => t.includes('Authentication failed')), 'wrong token rejection');
     await page.locator('#token').fill(token); await page.locator('#login button').click();
     await page.waitForFunction(() => document.querySelector('#lease').dataset.control === 'true');
-    await page.waitForFunction(() => Number(document.querySelector('#picture').dataset.frameId) > 0);
+    await page.waitForFunction(expected=>Number(document.querySelector('#picture').dataset.frameId)>0&&
+        document.querySelector('#picture').dataset.codec===expected,codec);
     assert.ok(!(await page.evaluate(() => document.cookie)).includes('rm_auth'));
     const cookie = (await context.cookies()).find(c => c.name === 'rm_auth');
     assert.ok(cookie.httpOnly && cookie.sameSite === 'Strict');
@@ -58,9 +60,9 @@ try {
         const ctx = document.querySelector('#picture').getContext('2d');
         return [canvas, view, [40, 30]].map(([x,y]) => [...ctx.getImageData(Math.floor(x), Math.floor(y), 1, 1).data]);
     }, current);
-    assert.ok(colors[0][0] > 180 && colors[0][1] < 80, 'NanoVG red pixels survived JPEG');
-    assert.ok(colors[1][1] > 180 && colors[1][0] < 80, 'View3D green pixels survived JPEG');
-    assert.ok(colors[2][0] > 100, 'ImGui window pixels survived JPEG');
+    assert.ok(colors[0][0]>180&&colors[0][1]<80,`NanoVG red pixels survived ${codec}`);
+    assert.ok(colors[1][1]>180&&colors[1][0]<80,`View3D green pixels survived ${codec}`);
+    assert.ok(colors[2][0]>100,`ImGui window pixels survived ${codec}`);
     async function screen(point) {
         return page.evaluate(([x,y]) => {
             const c = document.querySelector('#picture'), r = c.getBoundingClientRect();
@@ -74,8 +76,10 @@ try {
     await click('edit'); await sleep(200);
     await page.keyboard.type('ASCII '); await page.keyboard.insertText('äöüÄÖÜß é 🙂');
     await until(async () => (await state()).text === 'ASCII äöüÄÖÜß é 🙂', 'committed Unicode');
-    await page.evaluate(() => navigator.clipboard.writeText(' paste ß 日本'));
-    await page.keyboard.press('Control+V');
+    if(!isFirefox) {
+        await page.evaluate(()=>navigator.clipboard.writeText(' paste ß 日本'));
+        await page.keyboard.press('Control+V');
+    } else await page.keyboard.insertText(' paste ß 日本');
     await until(async () => (await state()).text === 'ASCII äöüÄÖÜß é 🙂 paste ß 日本', 'real clipboard paste');
     const beforeComposition = (await state()).text;
     await page.locator('#text').evaluate(element => {
@@ -114,8 +118,8 @@ try {
             const scale = Math.min(1, 1920/d.clientWidth, 1080/d.clientHeight);
             return width === Math.floor(d.clientWidth*scale) && height === Math.floor(d.clientHeight*scale) &&
                 c.width === width && c.height === height && Number(d.dataset.width) === width && Number(d.dataset.height) === height;
-        }, s);
-    }, 'rapid resize transaction and matching JPEG');
+        },s);
+    },`rapid resize transaction and matching ${codec}`);
     assert.ok((await state()).width <= 1920 && (await state()).height <= 1080);
     // A second authenticated browser gets frames but never input authority.
     const watchContext = await browser.newContext({viewport: {width: 500, height: 900}});
@@ -155,9 +159,11 @@ try {
     const start = await metrics(), cpuStart = await cpu(), t0 = performance.now();
     await sleep(2000);
     const end = await metrics(), seconds = (performance.now()-t0)/1000;
-    const report = {chromium: browser.version(), width: end.width, height: end.height,
-        jpegFps: (end.jpegEncoded-start.jpegEncoded)/seconds, serverCpuPercent: (await cpu()-cpuStart)/ticks/seconds*100,
-        averageReadbackEncodeMicros: (end.encodeMicros-start.encodeMicros)/(end.jpegEncoded-start.jpegEncoded),
+    const report={browser:browser.version(),engine:isFirefox?'firefox':'chromium',width:end.width,height:end.height,
+        imageCodec:codec,imageFps:(end.image_frames_encoded-start.image_frames_encoded)/seconds,
+        encodedBytesPerFrame:(end.image_bytes_encoded-start.image_bytes_encoded)/(end.image_frames_encoded-start.image_frames_encoded),
+        serverCpuPercent:(await cpu()-cpuStart)/ticks/seconds*100,
+        averageReadbackEncodeMicros:(end.encodeMicros-start.encodeMicros)/(end.image_frames_encoded-start.image_frames_encoded),
         metrics: end, syntheticIME: true};
     assert.equal((await state()).glError, 0); assert.deepEqual(pageErrors, [], 'no uncaught browser errors');
     if (process.env.RENDER_MODULE_TEST_VIDEO) {
@@ -166,7 +172,7 @@ try {
     await fs.writeFile(path.join(artifact, 'metrics.json'), JSON.stringify(report, null, 2));
     await page.screenshot({path: path.join(artifact, 'browser.png')});
     await fs.writeFile(path.join(artifact, 'console.json'), JSON.stringify(browserErrors, null, 2));
-    console.log('Chromium E2E passed: auth, JPEG pixels, widget click, Unicode, paste, CJK commit, orbit/zoom, capture, resize, viewer lease, blur, reconnect.');
+    console.log(`${isFirefox?'Firefox':'Chromium'} E2E passed (${codec}): auth, pixels, widget click, Unicode, paste, CJK commit, orbit/zoom, capture, resize, two viewers, blur, reconnect.`);
     console.log(JSON.stringify(report));
 } catch (error) {
     if (page) await page.screenshot({path: path.join(artifact, 'failure.png')}).catch(() => {});

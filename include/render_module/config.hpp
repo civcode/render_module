@@ -19,14 +19,17 @@ struct NativeEglConfig {
 };
 
 enum class WebTransport { JpegWebSocket, WebRtc };
+enum class WebSocketImageCodec { Jpeg, Png };
 struct IceServer {
     std::string urls; // One stun: or turn: URI; no embedded credentials. libnice turns: is rejected.
     std::string username;
     std::string credential;
 };
 struct WebConfig {
-    // Explicit opt-in preserves existing diagnostic deployments. Input stays on WebSocket.
+    // Explicit opt-in preserves existing WebSocket-image deployments.
     WebTransport transport = WebTransport::JpegWebSocket;
+    // Applies only to WebSocket image transport. JPEG remains the realtime default.
+    WebSocketImageCodec imageCodec = WebSocketImageCodec::Jpeg;
     std::vector<IceServer> iceServers; // Empty: directly routed LAN, no external service.
     bool iceRelayOnly = false;
     bool iceTcp = false;
@@ -38,7 +41,7 @@ struct WebConfig {
     bool allowUnauthenticatedPublicBind = false;
     bool allowMultipleViewers = true;
     unsigned maxClients = 8;
-    int jpegQuality = 80;
+    int jpegQuality = 80; // JPEG-only setting; PNG is lossless.
     int maxWidth = 1920, maxHeight = 1080;
     double fps = 20.0;
 };

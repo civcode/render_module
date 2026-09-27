@@ -9,7 +9,7 @@ namespace render_module::detail {
 struct WebCounters {
     std::atomic<unsigned> sessions{0};
     std::atomic<bool> controller{false};
-    std::atomic<std::uint64_t> rendered{0}, encoded{0}, dropped{0}, bytes{0};
+    std::atomic<std::uint64_t> rendered{0}, encoded{0}, dropped{0}, bytes{0}, encodedBytes{0};
     std::atomic<std::uint64_t> accepted{0}, rejected{0}, full{0}, encodeMicros{0};
 };
 // No server-library types, GL handles, or ImGui objects cross this boundary.

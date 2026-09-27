@@ -104,15 +104,21 @@ struct WebServer::Impl {
     std::string Metrics() {
         auto& c = owner.counters;
         WebSize size; { std::lock_guard<std::mutex> lock(mailbox); size = actual; }
-        boost::json::object result{{"version", RENDER_MODULE_WEB_VERSION}, {"build", RENDER_MODULE_WEB_BUILD_ID},
-            {"protocol", WebProtocolVersion}, {"backend", "web-jpeg-prototype"},
-            {"sessions", c.sessions.load()}, {"controller", c.controller.load()}, {"framesRendered", c.rendered.load()},
-            {"jpegEncoded", c.encoded.load()}, {"jpegDropped", c.dropped.load()}, {"bytesTransmitted", c.bytes.load()},
-            {"inputAccepted", c.accepted.load()}, {"inputRejected", c.rejected.load()}, {"inputQueueFull", c.full.load()},
-            {"encodeMicros", c.encodeMicros.load()}, {"width", size.width}, {"height", size.height}};
+        const auto codec=config.imageCodec==WebSocketImageCodec::Png?ImageCodec::Png:ImageCodec::Jpeg;
+        const auto frames=c.encoded.load(), encodeUs=c.encodeMicros.load();
+        boost::json::object result{{"version",RENDER_MODULE_WEB_VERSION},{"build",RENDER_MODULE_WEB_BUILD_ID},
+            {"protocol",WebProtocolVersion},{"image_protocol",WebImageProtocolVersion},{"backend","web-image"},
+            {"image_codec",ImageCodecName(codec)},{"sessions",c.sessions.load()},{"controller",c.controller.load()},
+            {"framesRendered",c.rendered.load()},{"image_frames_encoded",frames},{"image_frames_dropped",c.dropped.load()},
+            {"image_bytes_encoded",c.encodedBytes.load()},{"jpegEncoded",codec==ImageCodec::Jpeg?frames:0},
+            {"jpegDropped",codec==ImageCodec::Jpeg?c.dropped.load():0},{"pngEncoded",codec==ImageCodec::Png?frames:0},
+            {"pngDropped",codec==ImageCodec::Png?c.dropped.load():0},{"jpeg_encode_ms",codec==ImageCodec::Jpeg&&frames?double(encodeUs)/frames/1000:0},
+            {"png_encode_ms",codec==ImageCodec::Png&&frames?double(encodeUs)/frames/1000:0},{"bytesTransmitted",c.bytes.load()},
+            {"inputAccepted",c.accepted.load()},{"inputRejected",c.rejected.load()},{"inputQueueFull",c.full.load()},
+            {"encodeMicros",encodeUs},{"width",size.width},{"height",size.height}};
 #ifdef RENDER_MODULE_ENABLE_WEBRTC
         if(hub) {
-            result["backend"]="web-webrtc";
+            result["backend"]="web-webrtc";result["image_codec"]="inactive";
             boost::json::array clients; unsigned connected=0;
             std::uint64_t packets=0,bytes=0,nacks=0,retransmits=0,plis=0,submitted=0,rejected=0,dropped=0;
             for(const auto& s:hub->Snapshot()) {
@@ -220,7 +226,9 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
                 if (error) { self->Finish(); return; }
                 self->server.Elect();
                 self->Control(Json({{"type", "welcome"}, {"session", self->id}, {"control", self->server.controller == self.get()},
-                    {"transport",self->server.config.transport==WebTransport::WebRtc?"webrtc":"jpeg"},
+                    {"transport",self->server.config.transport==WebTransport::WebRtc?"webrtc":"websocket-image"},
+                    {"imageCodec",self->server.config.transport==WebTransport::WebRtc?"inactive":
+                        (self->server.config.imageCodec==WebSocketImageCodec::Png?"png":"jpeg")},
                     {"inputTransport",self->server.config.transport==WebTransport::WebRtc?"datachannel-v1":"websocket-json-v1"}}));
                 self->Read();
             });
@@ -539,9 +547,11 @@ bool WebServer::Start() {
             return false;
 #endif
         } else if(c.transport!=WebTransport::JpegWebSocket) return false;
+        if(c.imageCodec!=WebSocketImageCodec::Jpeg && c.imageCodec!=WebSocketImageCodec::Png) return false;
         const auto address = net::ip::make_address(c.bindAddress);
         if (!s.input || c.maxClients < 1 || c.maxClients > 32 || c.maxWidth < 1 || c.maxHeight < 1 ||
-            c.maxWidth > 2048 || c.maxHeight > 2048 || c.jpegQuality < 1 || c.jpegQuality > 100 ||
+            c.maxWidth > 2048 || c.maxHeight > 2048 ||
+            (c.imageCodec==WebSocketImageCodec::Jpeg && (c.jpegQuality<1 || c.jpegQuality>100)) ||
             !std::isfinite(c.fps) || c.fps < 1 || c.fps > 30) return false;
         if (!c.authToken.empty() && (c.authToken.size() < 16 || c.authToken.size() > 128 ||
             c.authToken.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_") != std::string::npos)) return false;

@@ -20,6 +20,7 @@ int main(int argc, char** argv) {
     config.headlessContext = render_module::HeadlessContext::NativeEgl;
     config.width = 640; config.height = 480; config.fps = 30; config.web.port = 0;
     config.web.authToken = "0123456789abcdef0123456789abcdef";
+    if(std::getenv("RENDER_MODULE_TEST_PNG")) config.web.imageCodec=render_module::WebSocketImageCodec::Png;
 #if defined(WEBRTC_TEST) || defined(INSTALLED_WEBRTC_TEST)
     if(std::getenv("RENDER_MODULE_TEST_WEBRTC")) {
         config.web.transport=render_module::WebTransport::WebRtc;
@@ -43,6 +44,7 @@ int main(int argc, char** argv) {
         if (!RenderModule::SetVideoOutput(video)) return 3;
     }
 #endif
+    const bool staticUi=std::getenv("RENDER_MODULE_TEST_STATIC_UI")!=nullptr;
     int frame = 0, clicks = 0, generation = 0; GLint oldRoot = 0;
     char text[1024] = {}; ImVec2 button{}, edit{}, viewCenter{}, canvasCenter{};
     RenderModule::RegisterImGuiCallback([&] {
@@ -55,7 +57,13 @@ int main(int argc, char** argv) {
         auto a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax(); button = {(a.x+b.x)/2, (a.y+b.y)/2};
         ImGui::InputText("Text", text, sizeof(text));
         a = ImGui::GetItemRectMin(); b = ImGui::GetItemRectMax(); edit = {(a.x+b.x)/2, (a.y+b.y)/2};
-        ImGui::Text("Clicks: %d", clicks); ImGui::TextUnformatted("Fixed UI / NanoVG / Magnum fixture"); ImGui::End();
+        ImGui::Text("Clicks: %d",clicks);ImGui::TextUnformatted("Fixed UI / NanoVG / Magnum fixture");
+        const double px[]={0,1,2},py[]={0,1,.25};
+        if(ImPlot::BeginPlot("##fixture-plot",{180,55},ImPlotFlags_NoLegend|ImPlotFlags_NoMouseText)) {
+            ImPlot::SetupAxes(nullptr,nullptr,ImPlotAxisFlags_NoDecorations,ImPlotAxisFlags_NoDecorations);
+            ImPlot::PlotLine("fixture",px,py,3);ImPlot::EndPlot();
+        }
+        ImGui::End();
         ImGui::SetNextWindowPos({0, 230}, ImGuiCond_Always); ImGui::SetNextWindowSize({300, 250}, ImGuiCond_Always);
         ImGui::Begin("Canvas", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize); ImGui::End();
         ImGui::SetNextWindowPos({300, 0}, ImGuiCond_Always); ImGui::SetNextWindowSize({340, 480}, ImGuiCond_Always);
@@ -67,9 +75,9 @@ int main(int argc, char** argv) {
         nvgFillColor(canvas.Graphics(), nvgRGB(245, 20, 20)); nvgFill(canvas.Graphics());
     });
     RenderModule::Register3DView("Scene", [&](render_module::View3D& view) {
-        if (frame == 1) view.Camera().LookAt({0, 0, 5}, {0, 0, 0}, {0, 1, 0});
-        const auto a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax(); viewCenter = {(a.x+b.x)/2, (a.y+b.y)/2};
-        view.Grid(4, 1); view.Box("box", {}, {1, 1, 1}); view.PointCloud("green", {{0,0,1}}, {0,1,0,1}, 35);
+        if(frame==1) view.Camera().LookAt({0,0,5},{0,0,0},{0,1,0});
+        const auto a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();viewCenter={(a.x+b.x)/2,(a.y+b.y)/2};
+        if(!staticUi) { view.Grid(4,1);view.Box("box",{},{1,1,1});view.PointCloud("green",{{0,0,1}},{0,1,0,1},35); }
         const auto p = view.Camera().Position(); const auto& io = ImGui::GetIO();
         boost::json::object state{{"frame", frame}, {"clicks", clicks}, {"text", text}, {"generation", generation},
             {"width", io.DisplaySize.x}, {"height", io.DisplaySize.y}, {"button", {button.x, button.y}},

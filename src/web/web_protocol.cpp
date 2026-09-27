@@ -183,14 +183,16 @@ bool ParseWebMessage(std::string_view text, const WebConfig& config,
         result = std::move(next); return true;
     } catch (const std::exception&) { return false; }
 }
-std::vector<unsigned char> PackJpeg(std::uint64_t id, int w, int h, const unsigned char* data, std::size_t size) {
-    if (!id || w <= 0 || h <= 0 || !data || !size || size > WebFrameLimit) return {};
-    std::vector<unsigned char> out; out.reserve(28+size);
-    const auto put = [&](std::uint64_t value, unsigned bytes) {
-        for (unsigned i = bytes; i; --i) out.push_back(static_cast<unsigned char>(value >> ((i-1)*8)));
+std::vector<unsigned char> PackImage(const EncodedImage& image) {
+    if(!image.frameId || !image.width || !image.height || image.width>2048 || image.height>2048 ||
+       image.bytes.empty() || image.bytes.size()>WebFrameLimit ||
+       (image.codec!=ImageCodec::Jpeg && image.codec!=ImageCodec::Png)) return {};
+    std::vector<unsigned char> out; out.reserve(28+image.bytes.size());
+    const auto put=[&](std::uint64_t value,unsigned bytes) {
+        for(unsigned i=bytes;i;--i) out.push_back(static_cast<unsigned char>(value>>((i-1)*8)));
     };
-    put(0x524d4a50, 4); put(WebProtocolVersion, 2); put(1, 2); put(id, 8);
-    put(unsigned(w), 4); put(unsigned(h), 4); put(size, 4);
-    out.insert(out.end(), data, data+size); return out;
+    put(0x524d494d,4); put(WebImageProtocolVersion,2); put(std::uint16_t(image.codec),2);
+    put(image.frameId,8); put(image.width,4); put(image.height,4); put(image.bytes.size(),4);
+    out.insert(out.end(),image.bytes.begin(),image.bytes.end()); return out;
 }
 } // namespace render_module::detail

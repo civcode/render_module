@@ -117,11 +117,13 @@ or the demo's `--frames` option. OSMesa and async PBO readback are not implement
 
 ## Embedded browser UI (Phase 5)
 
-**Temporary development transport: JPEG over WebSocket, not production video.**
-Web reuses the headless context, root framebuffer and Phase 4 input queue. No
-Desktop window is created. JPEG remains an explicit diagnostic mode. Optional
-[WebRTC](WEBRTC.md) provides H.264 video with [Phase 8 DataChannel input](INPUT_PROTOCOL.md).
-JPEG mode retains WebSocket input.
+The diagnostic **WebSocket image transport** supports JPEG and PNG; it is not
+production video. Web reuses the headless context, root framebuffer and Phase 4
+input queue, with no Desktop window. JPEG is the smaller/faster realtime default.
+PNG is lossless and intended for exact UI inspection, static/low-motion screens and
+screenshot comparison. Optional [WebRTC](WEBRTC.md) remains the recommended realtime
+H.264 path with [DataChannel input](INPUT_PROTOCOL.md). WebSocket image mode retains
+WebSocket input.
 
 Install system Boost >=1.75 (System/JSON development packages) and libjpeg
 development files; tested with Boost 1.83 and libjpeg-turbo 2.1.5. Then:
@@ -140,8 +142,18 @@ env -u DISPLAY -u WAYLAND_DISPLAY ./build-web/Release/bin/RenderModule3DDemo \
 Open `http://127.0.0.1:8080/` and enter the configured token. Without a token,
 loopback operation is permitted. In C++, select `Config.backend = Backend::Web`
 and set `Config.web`; environment token handling above belongs to the demo only.
-Defaults: 20 JPEG fps, quality 80, max 1920×1080, eight clients, FirstConnected
-controller with automatic promotion. The render cadence remains `Config.fps`.
+Defaults: 20 image fps, JPEG quality 80, max 1920×1080, eight clients and a
+FirstConnected controller with automatic promotion. JPEG remains default. Select PNG:
+
+```cpp
+config.backend = render_module::Backend::Web;
+config.web.transport = render_module::WebTransport::JpegWebSocket; // Legacy enum name: WebSocket image mode.
+config.web.imageCodec = render_module::WebSocketImageCodec::Png;
+```
+
+The demo equivalent is `--web-transport jpeg --web-image-codec png`. The render
+cadence remains `Config.fps`; PNG has no quality setting and may not sustain 20 fps
+at 1080p.
 
 The embedded vanilla JS client supports Pointer Events/capture, physical keys,
 committed Unicode/IME/paste, normalized wheel input, debounced viewport requests,

@@ -2,7 +2,7 @@
 #include "image_presenter.hpp"
 #include "core/render_output.hpp"
 #include "web/web_server.hpp"
-#include "web/jpeg_encode.h"
+#include "web/image_encoder.hpp"
 #ifdef RENDER_MODULE_ENABLE_WEBRTC
 #include "video/video_capture.hpp"
 #endif
@@ -29,7 +29,7 @@ class WebPresenter final : public IPresenter {
 public:
     WebPresenter(const Config& config, std::shared_ptr<RemoteInputQueue> input)
         : pipeline_(MakeWebVideo(config)), server_(config.web, std::move(input), pipeline_),
-          transport_(config.web.transport), quality_(config.web.jpegQuality), fps_(config.web.fps) {
+          transport_(config.web.transport), encoder_(config.web.imageCodec,config.web.jpegQuality,WebFrameLimit), fps_(config.web.fps) {
 #ifdef RENDER_MODULE_ENABLE_WEBRTC
         if(pipeline_) capture_=std::make_unique<VideoCapture>(pipeline_);
 #endif
@@ -41,12 +41,13 @@ public:
         server_.ObserveViewport({config.width, config.height});
         const std::string host = config.web.bindAddress.find(':') == std::string::npos ?
             config.web.bindAddress : "[" + config.web.bindAddress + "]";
-        std::fprintf(stderr, "RenderModule Web backend (%s; input over %s)\n"
-            "  Size : %dx%d\n  HTTP : http://%s:%u/\n  Auth : %s\n",
-            transport_==WebTransport::WebRtc?"WebRTC H.264":"DIAGNOSTIC JPEG/WebSocket",
+        std::fprintf(stderr,"RenderModule Web backend (%s; input over %s)\n"
+            "  Size : %dx%d\n  HTTP : http://%s:%u/\n  Auth : %s\n  WebSocket image codec : %s\n",
+            transport_==WebTransport::WebRtc?"WebRTC H.264":"WebSocket image",
             transport_==WebTransport::WebRtc?"DataChannels":"WebSocket",
-            config.width, config.height, host.c_str(), server_.Port(),
-            config.web.authToken.empty() ? "disabled" : "enabled");
+            config.width,config.height,host.c_str(),server_.Port(),
+            config.web.authToken.empty()?"disabled":"enabled",
+            transport_==WebTransport::WebRtc?"inactive":(encoder_.Codec()==ImageCodec::Png?"PNG":"JPEG"));
         return true;
     }
     bool PrepareFrame() override {
@@ -66,16 +67,17 @@ public:
         if(transport_==WebTransport::WebRtc) return capture_ && capture_->Submit(frame);
 #endif
         ImageRgba image;
-        if (!ImagePresenter::Read(frame, image)) return false; // Reuses the sole Phase 3 output flip.
-        unsigned char* bytes = nullptr; unsigned long size = 0;
-        if (!rm_encode_jpeg(image.pixels.data(), image.width, image.height, quality_, WebFrameLimit, &bytes, &size)) return false;
-        std::unique_ptr<unsigned char, decltype(&std::free)> owned(bytes, &std::free);
-        auto packet = std::make_shared<const std::vector<unsigned char>>(
-            PackJpeg(frame.frameId, image.width, image.height, bytes, size));
-        if (packet->empty()) { ++server_.counters.dropped; return true; }
-        ++server_.counters.encoded;
-        server_.counters.encodeMicros += std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-now).count();
-        server_.Publish(std::move(packet), frame.frameId);
+        if(!ImagePresenter::Read(frame,image)) return false; // Sole Phase 3 GL→top-down flip.
+        EncodedImage encoded;
+        if(!encoder_.Encode(image,frame.frameId,encoded)) {
+            ++server_.counters.dropped; return true; // Includes the explicit 16 MiB encoded limit.
+        }
+        const auto payloadBytes=encoded.bytes.size();
+        auto packet=std::make_shared<const std::vector<unsigned char>>(PackImage(encoded));
+        if(packet->empty()) { ++server_.counters.dropped; return true; }
+        ++server_.counters.encoded; server_.counters.encodedBytes+=payloadBytes;
+        server_.counters.encodeMicros+=std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-now).count();
+        server_.Publish(std::move(packet),frame.frameId);
         return true;
     }
 private:
@@ -86,7 +88,7 @@ private:
     std::unique_ptr<VideoCapture> capture_;
 #endif
     WebTransport transport_;
-    int quality_;
+    ImageEncoder encoder_;
     double fps_;
     Clock::time_point nextEncode_{};
 };

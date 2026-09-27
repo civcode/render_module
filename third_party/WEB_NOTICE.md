@@ -1,7 +1,8 @@
 # Optional Web backend dependencies
 
 The Web backend links system Boost.System/Boost.JSON and the system libjpeg API;
-Beast/Asio are Boost headers. These dependencies are not required by Desktop-only
+Beast/Asio are Boost headers. PNG uses NanoVG's already-built public-domain
+`stb_image_write`; see `PNG_NOTICE.md`, with no additional linked dependency. These dependencies are not required by Desktop-only
 or plain Headless builds. The browser assets are project-owned vanilla JS/CSS/HTML.
 
 ## Boost
