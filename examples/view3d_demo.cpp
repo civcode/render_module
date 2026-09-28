@@ -1,13 +1,13 @@
 #include "render_module/render_module.hpp"
 
-#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <string_view>
+#include <string>
 #include <vector>
 
+#include <cxxopts.hpp>
 #include <imgui_internal.h>
 
 namespace {
@@ -22,46 +22,152 @@ int main(int argc, char** argv) {
     config.title = "RenderModule 3D Demo";
     int frameLimit = 0;
     std::string screenshot;
-    for (int i = 1; i < argc; ++i) {
-        const std::string_view option = argv[i];
-        const std::string_view value = i + 1 < argc ? argv[++i] : "";
-        if (option == "--render-backend" && value == "desktop")
-            config.backend = render_module::Backend::Desktop;
-        else if (option == "--render-backend" && value == "headless")
-            config.backend = render_module::Backend::Headless;
-        else if (option == "--render-backend" && value == "web")
-            config.backend = render_module::Backend::Web;
-        else if (option == "--web-transport" && value == "webrtc") config.web.transport = render_module::WebTransport::WebRtc;
-        else if (option == "--web-transport" && value == "jpeg") config.web.transport = render_module::WebTransport::JpegWebSocket;
-        else if(option=="--web-image-codec" && value=="jpeg") config.web.imageCodec=render_module::WebSocketImageCodec::Jpeg;
-        else if(option=="--web-image-codec" && value=="png") config.web.imageCodec=render_module::WebSocketImageCodec::Png;
-        else if (option == "--web-bind" && !value.empty()) config.web.bindAddress = value;
-        else if (option == "--web-origin" && !value.empty()) config.web.allowedOrigins.emplace_back(value);
-        else if (option == "--web-port" && !value.empty()) {
-            unsigned port = 0;
-            const auto parsed = std::from_chars(value.data(), value.data()+value.size(), port);
-            if (parsed.ec != std::errc{} || parsed.ptr != value.data()+value.size() || port > 65535) return 1;
+
+    cxxopts::Options options(argv[0], "RenderModule 3D demo");
+    options.add_options("General")
+        ("h,help", "Show this help and exit")
+        ("frames", "Stop after N rendered frames; N must be greater than zero",
+            cxxopts::value<int>(), "N")
+        ("screenshot", "Save the final root framebuffer to a PNG file",
+            cxxopts::value<std::string>(), "PATH");
+    options.add_options("Rendering")
+        ("render-backend", "Rendering backend: desktop, headless, or web",
+            cxxopts::value<std::string>(), "BACKEND")
+        ("headless-context", "Headless GL context provider: glfw-null-egl or native-egl",
+            cxxopts::value<std::string>(), "CONTEXT");
+    options.add_options("Web")
+        ("web-transport", "Web transport: jpeg or webrtc",
+            cxxopts::value<std::string>(), "TRANSPORT")
+        ("web-image-codec", "WebSocket image codec: jpeg or png",
+            cxxopts::value<std::string>(), "CODEC")
+        ("web-bind", "Web server bind address",
+            cxxopts::value<std::string>(), "ADDRESS")
+        ("web-port", "Web server port in the range 0..65535",
+            cxxopts::value<std::uint32_t>(), "PORT")
+        ("web-origin", "Allowed web origin; may be specified more than once",
+            cxxopts::value<std::vector<std::string>>(), "ORIGIN");
+
+    try {
+        const auto result = options.parse(argc, argv);
+
+        if (result.count("help") != 0) {
+            const std::string help = options.help();
+            std::fprintf(stdout, "%s\n", help.c_str());
+            return 0;
+        }
+        if (!result.unmatched().empty()) {
+            std::fprintf(stderr, "Unexpected positional argument: %s\n",
+                result.unmatched().front().c_str());
+            return 1;
+        }
+
+        if (result.count("render-backend") != 0) {
+            const std::string value = result["render-backend"].as<std::string>();
+            if (value == "desktop")
+                config.backend = render_module::Backend::Desktop;
+            else if (value == "headless")
+                config.backend = render_module::Backend::Headless;
+            else if (value == "web")
+                config.backend = render_module::Backend::Web;
+            else {
+                std::fprintf(stderr,
+                    "Invalid --render-backend '%s'; expected desktop, headless, or web.\n",
+                    value.c_str());
+                return 1;
+            }
+        }
+
+        if (result.count("headless-context") != 0) {
+            const std::string value = result["headless-context"].as<std::string>();
+            if (value == "glfw-null-egl")
+                config.headlessContext = render_module::HeadlessContext::GlfwNullEgl;
+            else if (value == "native-egl")
+                config.headlessContext = render_module::HeadlessContext::NativeEgl;
+            else {
+                std::fprintf(stderr,
+                    "Invalid --headless-context '%s'; expected glfw-null-egl or native-egl.\n",
+                    value.c_str());
+                return 1;
+            }
+        }
+
+        if (result.count("web-transport") != 0) {
+            const std::string value = result["web-transport"].as<std::string>();
+            if (value == "jpeg")
+                config.web.transport = render_module::WebTransport::JpegWebSocket;
+            else if (value == "webrtc")
+                config.web.transport = render_module::WebTransport::WebRtc;
+            else {
+                std::fprintf(stderr,
+                    "Invalid --web-transport '%s'; expected jpeg or webrtc.\n",
+                    value.c_str());
+                return 1;
+            }
+        }
+
+        if (result.count("web-image-codec") != 0) {
+            const std::string value = result["web-image-codec"].as<std::string>();
+            if (value == "jpeg")
+                config.web.imageCodec = render_module::WebSocketImageCodec::Jpeg;
+            else if (value == "png")
+                config.web.imageCodec = render_module::WebSocketImageCodec::Png;
+            else {
+                std::fprintf(stderr,
+                    "Invalid --web-image-codec '%s'; expected jpeg or png.\n",
+                    value.c_str());
+                return 1;
+            }
+        }
+
+        if (result.count("web-bind") != 0) {
+            const std::string value = result["web-bind"].as<std::string>();
+            if (value.empty()) {
+                std::fprintf(stderr, "--web-bind requires a non-empty address.\n");
+                return 1;
+            }
+            config.web.bindAddress = value;
+        }
+
+        if (result.count("web-port") != 0) {
+            const std::uint32_t port = result["web-port"].as<std::uint32_t>();
+            if (port > 65535) {
+                std::fprintf(stderr, "--web-port must be in the range 0..65535.\n");
+                return 1;
+            }
             config.web.port = static_cast<std::uint16_t>(port);
         }
-        else if (option == "--headless-context" && value == "glfw-null-egl")
-            config.headlessContext = render_module::HeadlessContext::GlfwNullEgl;
-        else if (option == "--headless-context" && value == "native-egl")
-            config.headlessContext = render_module::HeadlessContext::NativeEgl;
-        else if (option == "--screenshot" && !value.empty())
-            screenshot = value;
-        else if (option == "--frames" && !value.empty()) {
-            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), frameLimit);
-            if (parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() && frameLimit > 0)
-                continue;
-            std::fprintf(stderr, "--frames requires a positive integer.\n");
-            return 1;
-        } else {
-            std::fprintf(stderr, "Usage: %s [--render-backend desktop|headless|web] "
-                "[--headless-context glfw-null-egl|native-egl] [--frames N] [--screenshot output.png] "
-                "[--web-transport jpeg|webrtc] [--web-image-codec jpeg|png] [--web-bind 127.0.0.1] "
-                "[--web-port 8080] [--web-origin http://host:port]\n",argv[0]);
-            return 1;
+
+        if (result.count("web-origin") != 0) {
+            const auto origins = result["web-origin"].as<std::vector<std::string>>();
+            for (const std::string& origin : origins) {
+                if (origin.empty()) {
+                    std::fprintf(stderr, "--web-origin requires a non-empty origin.\n");
+                    return 1;
+                }
+                config.web.allowedOrigins.emplace_back(origin);
+            }
         }
+
+        if (result.count("screenshot") != 0) {
+            screenshot = result["screenshot"].as<std::string>();
+            if (screenshot.empty()) {
+                std::fprintf(stderr, "--screenshot requires a non-empty path.\n");
+                return 1;
+            }
+        }
+
+        if (result.count("frames") != 0) {
+            frameLimit = result["frames"].as<int>();
+            if (frameLimit <= 0) {
+                std::fprintf(stderr, "--frames requires a positive integer.\n");
+                return 1;
+            }
+        }
+    } catch (const cxxopts::exceptions::parsing& error) {
+        std::fprintf(stderr, "Command-line error: %s\n\n", error.what());
+        const std::string help = options.help();
+        std::fprintf(stderr, "%s\n", help.c_str());
+        return 1;
     }
     if (config.backend == render_module::Backend::Web) {
         config.fps = 30;
@@ -113,8 +219,8 @@ int main(int argc, char** argv) {
         ImGui::End();
     });
 
-    render_module::View3DOptions options;
-    options.showStatus = true;
+    render_module::View3DOptions viewOptions;
+    viewOptions.showStatus = true;
 
     RenderModule::Register3DView("Localization 3D", [&](render_module::View3D& view) {
         using namespace render_module;
@@ -200,7 +306,7 @@ int main(int argc, char** argv) {
                   {1.0f, 0.85f, 0.10f, 1.0f}, 2.0f);
 
         cameraPose = view.Camera().Pose();
-    }, options);
+    }, viewOptions);
 
     RenderModule::Run();
     const bool captured = screenshot.empty() || RenderModule::SaveScreenshot(screenshot);

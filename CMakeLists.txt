@@ -355,6 +355,17 @@ install(
 )
 
 if(RENDER_MODULE_BUILD_EXAMPLES)
+    set(CXXOPTS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(CXXOPTS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(CXXOPTS_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        cxxopts
+        GIT_REPOSITORY https://github.com/jarro2783/cxxopts.git
+        GIT_TAG v3.3.1 # 44380e5a44706ab7347f400698c703eb2a196202
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(cxxopts)
+
     function(render_module_example target source)
         add_executable(${target} ${source})
         target_link_libraries(${target} PRIVATE RenderModule::RenderModule)
@@ -366,10 +377,38 @@ if(RENDER_MODULE_BUILD_EXAMPLES)
     render_module_example(DebugConsoleDemo examples/debug_console_demo.cpp)
     render_module_example(PathPlanningDemo examples/path_planning_demo.cpp)
     render_module_example(RenderModule3DDemo examples/view3d_demo.cpp)
+    target_link_libraries(RenderModule3DDemo PRIVATE cxxopts::cxxopts)
 endif()
 
 if(RENDER_MODULE_BUILD_TESTS)
     enable_testing()
+    if(RENDER_MODULE_BUILD_EXAMPLES)
+        add_test(NAME demo_cli_help
+            COMMAND $<TARGET_FILE:RenderModule3DDemo> --help)
+        set_tests_properties(demo_cli_help PROPERTIES
+            PASS_REGULAR_EXPRESSION "render-backend" TIMEOUT 10 LABELS cli)
+
+        foreach(case unknown_option invalid_backend invalid_frames invalid_port empty_screenshot positional)
+            if(case STREQUAL "unknown_option")
+                set(_demo_cli_args --unknown-option x)
+            elseif(case STREQUAL "invalid_backend")
+                set(_demo_cli_args --render-backend invalid)
+            elseif(case STREQUAL "invalid_frames")
+                set(_demo_cli_args --frames 0)
+            elseif(case STREQUAL "invalid_port")
+                set(_demo_cli_args --web-port 65536)
+            elseif(case STREQUAL "empty_screenshot")
+                set(_demo_cli_args --screenshot=)
+            else()
+                set(_demo_cli_args unexpected-positional)
+            endif()
+            add_test(NAME demo_cli_${case}
+                COMMAND $<TARGET_FILE:RenderModule3DDemo> ${_demo_cli_args})
+            set_tests_properties(demo_cli_${case} PROPERTIES
+                WILL_FAIL TRUE TIMEOUT 10 LABELS cli)
+        endforeach()
+        unset(_demo_cli_args)
+    endif()
     if(RENDER_MODULE_ENABLE_VIDEO)
         add_executable(RenderModuleVideoTests tests/video_tests.cpp)
         target_link_libraries(RenderModuleVideoTests PRIVATE RenderModule::Video)

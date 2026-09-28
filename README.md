@@ -29,6 +29,8 @@ cmake --build build --parallel
 ./build/Release/bin/RenderModule3DDemo
 ~~~
 
+Run `RenderModule3DDemo --help` for the complete command-line option list.
+
 The existing 2D demo remains available as well:
 
 ~~~sh
