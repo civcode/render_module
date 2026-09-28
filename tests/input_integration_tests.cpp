@@ -1,6 +1,8 @@
 #include "render_module/render_module.hpp"
 #include "input/input_access.hpp"
 #include "core/render_output.hpp"
+#include "render_module_test_guard.hpp"
+#include <catch2/catch_test_macros.hpp>
 #include <glad/glad.h>
 #include <imgui_internal.h>
 #ifdef RENDER_MODULE_TEST_DESKTOP
@@ -16,7 +18,6 @@
 
 using namespace render_module::detail;
 namespace {
-#define CHECK(x) do { if (!(x)) throw std::runtime_error("line " + std::to_string(__LINE__) + ": " #x); } while (false)
 float Distance(render_module::Vec3 a, render_module::Vec3 b) {
     return std::sqrt((a.x-b.x)*(a.x-b.x)+(a.y-b.y)*(a.y-b.y)+(a.z-b.z)*(a.z-b.z));
 }
@@ -36,16 +37,16 @@ struct Injector {
     GLFWcharfun character;
 #endif
     explicit Injector(bool isDesktop) : desktop(isDesktop), queue(RemoteInputQueueHandle()) {
-        if (!desktop) { CHECK(queue); return; }
-        CHECK(!queue);
+        if (!desktop) { REQUIRE((queue)); return; }
+        REQUIRE((!queue));
 #ifdef RENDER_MODULE_TEST_DESKTOP
-        window = glfwGetCurrentContext(); CHECK(window);
+        window = glfwGetCurrentContext(); REQUIRE((window));
         cursor = glfwSetCursorPosCallback(window, nullptr); glfwSetCursorPosCallback(window, cursor);
         mouse = glfwSetMouseButtonCallback(window, nullptr); glfwSetMouseButtonCallback(window, mouse);
         scroll = glfwSetScrollCallback(window, nullptr); glfwSetScrollCallback(window, scroll);
         key = glfwSetKeyCallback(window, nullptr); glfwSetKeyCallback(window, key);
         character = glfwSetCharCallback(window, nullptr); glfwSetCharCallback(window, character);
-        CHECK(cursor && mouse && scroll && key && character);
+        REQUIRE((cursor && mouse && scroll && key && character));
         glfwFocusWindow(window);
 #endif
     }
@@ -53,7 +54,7 @@ struct Injector {
         EnqueueResult result{EnqueueStatus::Invalid};
         std::thread producer([&] { result = queue->Enqueue(std::move(event)); });
         producer.join();
-        CHECK(result.Accepted());
+        REQUIRE((result.Accepted()));
     }
     void Move(ImVec2 position) {
         if (!desktop) { Send(MouseMove{position.x/640, position.y/480}); return; }
@@ -93,13 +94,13 @@ struct Injector {
 
 void Run(const char* mode) {
     const bool desktop = std::strcmp(mode, "desktop") == 0;
-    if (!desktop) { CHECK(!std::getenv("DISPLAY")); CHECK(!std::getenv("WAYLAND_DISPLAY")); }
+    if (!desktop) { REQUIRE((!std::getenv("DISPLAY"))); REQUIRE((!std::getenv("WAYLAND_DISPLAY"))); }
     render_module::Config config;
     config.width = 640; config.height = 480; config.fps = 0;
     config.backend = desktop ? render_module::Backend::Desktop : render_module::Backend::Headless;
     config.headlessContext = std::strcmp(mode, "glfw") == 0 ? render_module::HeadlessContext::GlfwNullEgl :
         render_module::HeadlessContext::NativeEgl;
-    CHECK(RenderModule::Init(config));
+    REQUIRE((RenderModule::Init(config)));
     ImGui::GetIO().IniFilename = nullptr;
     Injector inject(desktop);
     RenderModule::EnableRootWindowDocking();
@@ -113,17 +114,17 @@ void Run(const char* mode) {
         ++frames;
         GLint current; glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &current);
         if (frames == 1) rootHandle = current;
-        CHECK(rootHandle != 0);
-        if (frames <= 100) CHECK(current == rootHandle); // Input must not recreate root.
+        REQUIRE((rootHandle != 0));
+        if (frames <= 100) REQUIRE((current == rootHandle)); // Input must not recreate root.
         if (desktop && frames > 100) {
-            CHECK(frames < 200);
+            REQUIRE((frames < 200));
             if (ImGui::GetIO().DisplaySize.x == 800 && ImGui::GetIO().DisplaySize.y == 600) {
-                CHECK(current != rootHandle); // Only an actual resize recreates storage.
-                CHECK(RenderModule::GetWindowSize().x == 800);
+                REQUIRE((current != rootHandle)); // Only an actual resize recreates storage.
+                REQUIRE((RenderModule::GetWindowSize().x == 800));
                 RenderModule::RequestClose();
             }
         }
-        CHECK(glGetError() == GL_NO_ERROR);
+        REQUIRE((glGetError() == GL_NO_ERROR));
         const auto dock = RenderModule::GetRootDockspaceID();
         if (frames == 1) {
             ImGui::DockBuilderRemoveNode(dock);
@@ -143,48 +144,48 @@ void Run(const char* mode) {
         ImGui::InputText("Text", text, sizeof(text)); edit = CenterOfItem();
         ImGui::End();
         if (frames >= 8) {
-            CHECK(ImGui::FindWindowByName("Controls")->DockId != 0);
-            CHECK(ImGui::FindWindowByName("3D")->DockId != 0);
+            REQUIRE((ImGui::FindWindowByName("Controls")->DockId != 0));
+            REQUIRE((ImGui::FindWindowByName("3D")->DockId != 0));
         }
         switch (frames) {
             case 4: inject.Move(button); inject.Button(RemoteMouseButton::Left, true);
                     inject.Button(RemoteMouseButton::Left, false); break;
-            case 8: CHECK(clicks == 1); break;
+            case 8: REQUIRE((clicks == 1)); break;
             case 12: inject.Move(edit); inject.Button(RemoteMouseButton::Left, true);
                      inject.Button(RemoteMouseButton::Left, false); break;
             case 16: inject.Text(); break;
-            case 20: CHECK(std::strcmp(text, u8"Remote äöüÄÖÜß é 日本 🙂") == 0); break;
+            case 20: REQUIRE((std::strcmp(text, u8"Remote äöüÄÖÜß é 日本 🙂") == 0)); break;
             case 24: inject.Backspace(); break;
-            case 28: CHECK(std::strcmp(text, u8"Remote äöüÄÖÜß é 日本 ") == 0); break;
+            case 28: REQUIRE((std::strcmp(text, u8"Remote äöüÄÖÜß é 日本 ") == 0)); break;
             case 32: if (!desktop) {
                 inject.Send(Key{RenderKey::LeftCtrl, true}); inject.Send(Key{RenderKey::A, true});
                 inject.Send(Key{RenderKey::A, false}); inject.Send(Key{RenderKey::LeftCtrl, false});
             } break;
             case 36: if (!desktop) inject.Send(TextUtf8{u8"Replacement ß"}); break;
-            case 40: if (!desktop) CHECK(std::strcmp(text, u8"Replacement ß") == 0);
+            case 40: if (!desktop) REQUIRE((std::strcmp(text, u8"Replacement ß") == 0));
                      orbitPosition = position; orbitTarget = target; originalDistance = distance; break;
             case 44: inject.Move(viewCenter); break;
             case 48: inject.Button(RemoteMouseButton::Right, true); break;
             case 52: inject.Move({viewCenter.x + 60, viewCenter.y + 30}); break;
             case 56: inject.Button(RemoteMouseButton::Right, false); break;
-            case 60: CHECK(Distance(position, orbitPosition) > .1f);
-                     CHECK(Distance(target, orbitTarget) < .001f);
-                     CHECK(std::abs(distance - originalDistance) < .001f);
+            case 60: REQUIRE((Distance(position, orbitPosition) > .1f));
+                     REQUIRE((Distance(target, orbitTarget) < .001f));
+                     REQUIRE((std::abs(distance - originalDistance) < .001f));
                      panPosition = position; panTarget = target; break;
             case 64: inject.Move(viewCenter); break;
             case 68: inject.Button(RemoteMouseButton::Middle, true); break;
             case 72: inject.Move({viewCenter.x + 40, viewCenter.y - 25}); break;
             case 76: inject.Button(RemoteMouseButton::Middle, false); break;
-            case 80: CHECK(Distance(position, panPosition) > .1f);
-                     CHECK(Distance(target, panTarget) > .1f);
-                     CHECK(std::abs(Distance(position, panPosition) - Distance(target, panTarget)) < .001f);
-                     CHECK(std::abs(distance - originalDistance) < .001f);
+            case 80: REQUIRE((Distance(position, panPosition) > .1f));
+                     REQUIRE((Distance(target, panTarget) > .1f));
+                     REQUIRE((std::abs(Distance(position, panPosition) - Distance(target, panTarget)) < .001f));
+                     REQUIRE((std::abs(distance - originalDistance) < .001f));
                      beforeZoom = distance; break;
             case 84: inject.Wheel(); break;
-            case 88: CHECK(std::abs(distance - beforeZoom/1.2f) < .001f); break;
+            case 88: REQUIRE((std::abs(distance - beforeZoom/1.2f) < .001f)); break;
             case 92: inject.Move(canvasCenter); inject.Button(RemoteMouseButton::Left, true);
                      inject.Button(RemoteMouseButton::Left, false); break;
-            case 96: CHECK(canvasPresses == 1 && canvasReleases >= 1); break;
+            case 96: REQUIRE((canvasPresses == 1 && canvasReleases >= 1)); break;
             case 100:
                 if (!desktop) RenderModule::RequestClose();
 #ifdef RENDER_MODULE_TEST_DESKTOP
@@ -205,17 +206,30 @@ void Run(const char* mode) {
         view.Grid(4, 1); view.Box("box", {}, {1, 1, 1});
     });
     RenderModule::Run();
-    CHECK(desktop ? frames > 100 && frames < 200 : frames == 100);
+    REQUIRE((desktop ? frames > 100 && frames < 200 : frames == 100));
     const auto frame = CompletedFrame();
-    CHECK(frame.IsValid() && frame.framebufferGeneration == (desktop ? 2u : 1u));
-    CHECK(glGetError() == GL_NO_ERROR);
+    REQUIRE((frame.IsValid() && frame.framebufferGeneration == (desktop ? 2u : 1u)));
+    REQUIRE((glGetError() == GL_NO_ERROR));
     auto handle = inject.queue;
     RenderModule::Shutdown();
-    if (handle) CHECK(handle->Enqueue(Focus{true}).status == EnqueueStatus::Closed);
+    if (handle) REQUIRE((handle->Enqueue(Focus{true}).status == EnqueueStatus::Closed));
     std::puts("Application input passed: button, UTF-8 InputText, keyboard editing, Canvas, docking, View3D orbit/pan/zoom, stable root (Desktop resize also checked).");
 }
 } // namespace
-int main(int argc, char** argv) {
-    try { CHECK(argc == 2); Run(argv[1]); return 0; }
-    catch (const std::exception& e) { std::fprintf(stderr, "%s\n", e.what()); RenderModule::Shutdown(); return 1; }
+
+#ifdef RENDER_MODULE_TEST_DESKTOP
+TEST_CASE("Desktop input integration", "[input][integration][desktop]") {
+    RenderModuleTestGuard cleanup;
+    Run("desktop");
+}
+#endif
+
+TEST_CASE("Native EGL input integration", "[input][integration][native]") {
+    RenderModuleTestGuard cleanup;
+    Run("native");
+}
+
+TEST_CASE("GLFW Null EGL input integration", "[input][integration][glfw]") {
+    RenderModuleTestGuard cleanup;
+    Run("glfw");
 }

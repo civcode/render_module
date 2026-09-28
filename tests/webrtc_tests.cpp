@@ -1,4 +1,5 @@
 #include "webrtc/webrtc_media.hpp"
+#include <catch2/catch_test_macros.hpp>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -6,15 +7,14 @@
 #include <stdexcept>
 using namespace render_module;
 using namespace render_module::detail;
-#define CHECK(x) do { if(!(x)) throw std::runtime_error("line "+std::to_string(__LINE__)+": " #x); } while(false)
 namespace {
 void ClockTest() {
     for(std::int64_t us:{0LL,1LL,11LL,12LL,33333LL,1000000LL,1000000000000LL})
-        CHECK(RtpTimestamp(0xfffffff0,us)==std::uint32_t(0xfffffff0ULL+std::uint64_t(us)*9/100));
-    CHECK(RtpTimestamp(1,std::numeric_limits<std::int64_t>::max())==
+        REQUIRE((RtpTimestamp(0xfffffff0,us)==std::uint32_t(0xfffffff0ULL+std::uint64_t(us)*9/100)));
+    REQUIRE((RtpTimestamp(1,std::numeric_limits<std::int64_t>::max())==
         std::uint32_t(1+(std::uint64_t(std::numeric_limits<std::int64_t>::max())/100)*9+
-        (std::uint64_t(std::numeric_limits<std::int64_t>::max())%100)*9/100));
-    for(std::int64_t n=1;n<10000;++n) CHECK(RtpTimestamp(73,n*1000000/30)==73+std::uint32_t((n*1000000/30)*9/100));
+        (std::uint64_t(std::numeric_limits<std::int64_t>::max())%100)*9/100)));
+    for(std::int64_t n=1;n<10000;++n) REQUIRE((RtpTimestamp(73,n*1000000/30)==73+std::uint32_t((n*1000000/30)*9/100)));
 }
 video::EncodedFrame Synthetic(bool key=true) {
     auto bytes=std::make_shared<std::vector<std::uint8_t>>();
@@ -31,27 +31,27 @@ rtc::message_vector Packetize(RtpSender& sender,const video::EncodedFrame& f,rtc
 void PacketTest() {
     auto a=std::make_shared<RtcCounters>(),b=std::make_shared<RtcCounters>();
     RtpSender one(111,123,65534,a,[]{}),two(222,321,19,b,[]{});
-    auto frame=Synthetic();CHECK(CompatibleAccessUnit(frame)); rtc::message_vector control;
+    auto frame=Synthetic();REQUIRE((CompatibleAccessUnit(frame))); rtc::message_vector control;
     const auto packets=Packetize(one,frame,control),other=Packetize(two,frame,control);
-    CHECK(packets.size()>6 && packets.size()==other.size() && a->packets==packets.size());
+    REQUIRE((packets.size()>6 && packets.size()==other.size() && a->packets==packets.size()));
     std::vector<std::uint8_t> recovered;unsigned starts=0,ends=0;
     for(std::size_t i=0;i<packets.size();++i) {
         const auto& p=packets[i];const auto* h=reinterpret_cast<const rtc::RtpHeader*>(p->data());
-        CHECK(h->ssrc()==111 && h->seqNumber()==std::uint16_t(65534+i));
-        CHECK(h->timestamp()==RtpTimestamp(123,frame.ptsUs) && p->size()<=WebRtcFragmentSize+12);
-        const auto* k=reinterpret_cast<const rtc::RtpHeader*>(other[i]->data());CHECK(k->ssrc()==222 && k->seqNumber()==19+i && k->timestamp()!=h->timestamp());
+        REQUIRE((h->ssrc()==111 && h->seqNumber()==std::uint16_t(65534+i)));
+        REQUIRE((h->timestamp()==RtpTimestamp(123,frame.ptsUs) && p->size()<=WebRtcFragmentSize+12));
+        const auto* k=reinterpret_cast<const rtc::RtpHeader*>(other[i]->data());REQUIRE((k->ssrc()==222 && k->seqNumber()==19+i && k->timestamp()!=h->timestamp()));
         const auto* data=reinterpret_cast<const std::uint8_t*>(p->data())+12;
-        if(i==0) CHECK((data[0]&31)==7); else if(i==1) CHECK((data[0]&31)==8);
-        else { CHECK((data[0]&31)==28 && (data[1]&31)==5);starts+=bool(data[1]&128);ends+=bool(data[1]&64);
+        if(i==0) REQUIRE(((data[0]&31)==7)); else if(i==1) REQUIRE(((data[0]&31)==8));
+        else { REQUIRE(((data[0]&31)==28 && (data[1]&31)==5));starts+=bool(data[1]&128);ends+=bool(data[1]&64);
             recovered.insert(recovered.end(),data+2,data+p->size()-12); }
-        CHECK(bool(h->marker())==(i==packets.size()-1));
+        REQUIRE((bool(h->marker())==(i==packets.size()-1)));
     }
-    CHECK(starts==1 && ends==1 && recovered==std::vector<std::uint8_t>(7000,0x55));
-    CHECK(!control.empty());bool report=false;
+    REQUIRE((starts==1 && ends==1 && recovered==std::vector<std::uint8_t>(7000,0x55)));
+    REQUIRE((!control.empty()));bool report=false;
     for(const auto& m:control) {const auto* h=reinterpret_cast<const rtc::RtcpHeader*>(m->data());if(h->payloadType()==200)report=true;}
-    CHECK(report);
+    REQUIRE((report));
     frame=Synthetic(false);frame.ptsUs=66666;
-    const auto p=Packetize(one,frame,control);CHECK(p.size()==1 && (std::to_integer<unsigned>((*p[0])[12])&31)==1);
+    const auto p=Packetize(one,frame,control);REQUIRE((p.size()==1 && (std::to_integer<unsigned>((*p[0])[12])&31)==1));
 }
 void FeedbackTest() {
     auto counters=std::make_shared<RtcCounters>();unsigned force=0;
@@ -61,30 +61,30 @@ void FeedbackTest() {
     auto* n=reinterpret_cast<rtc::RtcpNack*>(nack->data());n->preparePacket(1234,1);n->parts[0].setPid(100);n->parts[0].setBlp(0);
     rtc::message_vector incoming{nack},resent;
     sender.handler->incomingChain(incoming,[&](auto m){resent.push_back(m);});
-    CHECK(counters->nacks==1 && counters->retransmits==1 && resent.size()==1 && *resent[0]==*packets[0]);
+    REQUIRE((counters->nacks==1 && counters->retransmits==1 && resent.size()==1 && *resent[0]==*packets[0]));
     auto pli=rtc::make_message(rtc::RtcpPli::Size(),rtc::Message::Control);
     reinterpret_cast<rtc::RtcpPli*>(pli->data())->preparePacket(1234);incoming={pli};
-    sender.handler->incomingChain(incoming,[](auto){});CHECK(force==1 && counters->plis==1);
+    sender.handler->incomingChain(incoming,[](auto){});REQUIRE((force==1 && counters->plis==1));
     auto remb=rtc::make_message(rtc::RtcpRemb::SizeWithSSRCs(1),rtc::Message::Control);
     auto* r=reinterpret_cast<rtc::RtcpRemb*>(remb->data());r->preparePacket(99,1,2000000);r->setSSRC(0,1234);
-    incoming={remb};sender.handler->incomingChain(incoming,[](auto){});CHECK(counters->rembBps==2000000 && counters->rembTimeMs>0);
+    incoming={remb};sender.handler->incomingChain(incoming,[](auto){});REQUIRE((counters->rembBps==2000000 && counters->rembTimeMs>0));
     auto invalid=rtc::make_message(4,rtc::Message::Control);(*invalid)[0]=rtc::byte{0x81};(*invalid)[1]=rtc::byte{205};
-    incoming={invalid};sender.handler->incomingChain(incoming,[](auto){});CHECK(incoming.empty() && counters->invalidRtcp==1);
+    incoming={invalid};sender.handler->incomingChain(incoming,[](auto){});REQUIRE((incoming.empty() && counters->invalidRtcp==1));
     for(unsigned i=0;i<WebRtcNackHistory+1;++i) {auto f=Synthetic(false);f.ptsUs=100000+i*33333;Packetize(sender,f,control);}
-    incoming={nack};sender.handler->incomingChain(incoming,[](auto){});CHECK(counters->retransmits==1); // History evicted.
+    incoming={nack};sender.handler->incomingChain(incoming,[](auto){});REQUIRE((counters->retransmits==1)); // History evicted.
 }
 void SdpTest() {
-    WebConfig c; CHECK(ValidateIceConfiguration(c));c.iceRelayOnly=true;CHECK(!ValidateIceConfiguration(c));
+    WebConfig c; REQUIRE((ValidateIceConfiguration(c)));c.iceRelayOnly=true;REQUIRE((!ValidateIceConfiguration(c)));
     for(const auto* url:{"turn:localhost:3478","turn:localhost:3478?transport=tcp"}) {
-        c.iceServers={{url,"user","password"}};CHECK(ValidateIceConfiguration(c));
+        c.iceServers={{url,"user","password"}};REQUIRE((ValidateIceConfiguration(c)));
     }
-    c.iceServers={{"turns:localhost:5349","user","password"}};CHECK(!ValidateIceConfiguration(c));
-    c.iceServers={{"turn:localhost:5349?transport=tls","user","password"}};CHECK(!ValidateIceConfiguration(c));
-    c.iceServers={{"turn:user:password@localhost","user","password"}};CHECK(!ValidateIceConfiguration(c));
-    CHECK(ValidateRtcCandidate("candidate:1 1 UDP 2122260223 127.0.0.1 50000 typ host","video"));
-    CHECK(!ValidateRtcCandidate("candidate:1 1 UDP 1 127.0.0.1 70000 typ host","video"));
-    CHECK(!ValidateRtcCandidate("garbage","video"));CHECK(!ValidateRtcAnswer("garbage"));
-    CHECK(!ValidateRtcAnswer(std::string(WebRtcSdpLimit+1,'a')));
+    c.iceServers={{"turns:localhost:5349","user","password"}};REQUIRE((!ValidateIceConfiguration(c)));
+    c.iceServers={{"turn:localhost:5349?transport=tls","user","password"}};REQUIRE((!ValidateIceConfiguration(c)));
+    c.iceServers={{"turn:user:password@localhost","user","password"}};REQUIRE((!ValidateIceConfiguration(c)));
+    REQUIRE((ValidateRtcCandidate("candidate:1 1 UDP 2122260223 127.0.0.1 50000 typ host","video")));
+    REQUIRE((!ValidateRtcCandidate("candidate:1 1 UDP 1 127.0.0.1 70000 typ host","video")));
+    REQUIRE((!ValidateRtcCandidate("garbage","video")));REQUIRE((!ValidateRtcAnswer("garbage")));
+    REQUIRE((!ValidateRtcAnswer(std::string(WebRtcSdpLimit+1,'a'))));
     const auto answer=[](std::string fmtp) {
         return "v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE video 0\r\n"
             "m=video 9 UDP/TLS/RTP/SAVPF 96\r\nc=IN IP4 0.0.0.0\r\na=mid:video\r\na=recvonly\r\na=rtcp-mux\r\n"
@@ -94,52 +94,50 @@ void SdpTest() {
             "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\nc=IN IP4 0.0.0.0\r\n"
             "a=mid:0\r\na=sctp-port:5000\r\na=max-message-size:262144\r\n";
     };
-    CHECK(ValidateRtcAnswer(answer("profile-level-id=42c028")));
-    CHECK(ValidateRtcAnswer(answer("profile-level-id=42e01f;max-recv-level=e028")));
-    CHECK(!ValidateRtcAnswer(answer("profile-level-id=42e01f;level-asymmetry-allowed=1")));
-    CHECK(!ValidateRtcAnswer(answer("profile-level-id=42e01f;max-recv-level=e01f")));
-    CHECK(!ValidateRtcAnswer(answer("profile-level-id=42e01f;max-recv-level=ffff")));
-    CHECK(!ValidateRtcAnswer(answer("profile-level-id=640028")));
-    CHECK(!ValidateRtcAnswer(answer("profile-level-id=42c028;profile-level-id=42c028")));
-    CHECK(!ValidateRtcAnswer(answer("profile-level-id=42c028;packetization-mode=0")));
+    REQUIRE((ValidateRtcAnswer(answer("profile-level-id=42c028"))));
+    REQUIRE((ValidateRtcAnswer(answer("profile-level-id=42e01f;max-recv-level=e028"))));
+    REQUIRE((!ValidateRtcAnswer(answer("profile-level-id=42e01f;level-asymmetry-allowed=1"))));
+    REQUIRE((!ValidateRtcAnswer(answer("profile-level-id=42e01f;max-recv-level=e01f"))));
+    REQUIRE((!ValidateRtcAnswer(answer("profile-level-id=42e01f;max-recv-level=ffff"))));
+    REQUIRE((!ValidateRtcAnswer(answer("profile-level-id=640028"))));
+    REQUIRE((!ValidateRtcAnswer(answer("profile-level-id=42c028;profile-level-id=42c028"))));
+    REQUIRE((!ValidateRtcAnswer(answer("profile-level-id=42c028;packetization-mode=0"))));
     auto badDirection=answer("profile-level-id=42c028");badDirection.replace(badDirection.find("recvonly"),8,"sendrecv");
-    CHECK(!ValidateRtcAnswer(badDirection));
-    auto noData=answer("profile-level-id=42c028"); noData.erase(noData.find("m=application")); CHECK(!ValidateRtcAnswer(noData));
+    REQUIRE((!ValidateRtcAnswer(badDirection)));
+    auto noData=answer("profile-level-id=42c028"); noData.erase(noData.find("m=application")); REQUIRE((!ValidateRtcAnswer(noData)));
     auto wrongBundle=answer("profile-level-id=42c028"); wrongBundle.replace(wrongBundle.find("BUNDLE video 0"),14,"BUNDLE video");
-    CHECK(!ValidateRtcAnswer(wrongBundle));
+    REQUIRE((!ValidateRtcAnswer(wrongBundle)));
     auto removedData=answer("profile-level-id=42c028"); removedData.replace(removedData.find("m=application 9"),15,"m=application 0");
-    CHECK(!ValidateRtcAnswer(removedData));
+    REQUIRE((!ValidateRtcAnswer(removedData)));
     auto encoder=video::CreateOpenH264Encoder();video::RgbaFramePool pool;video::I420Converter converter;
     std::uint64_t id=0;
     for(const auto size:{std::pair<int,int>{1280,720},{1600,900},{1920,1080},{1280,720}}) {
         video::EncoderConfig cfg;cfg.width=size.first;cfg.height=size.second;cfg.framebufferGeneration=++id;
-        CHECK(encoder->Configure(cfg) && pool.Configure(cfg.width,cfg.height) && converter.Configure(cfg.width,cfg.height));
-        video::VideoFrame rgba,yuv;std::uint8_t* data;CHECK(pool.Acquire(rgba,data));std::memset(data,127,rgba.storage->size());
-        rgba.frameId=id;rgba.framebufferGeneration=id;rgba.ptsUs=id*33333;CHECK(converter.Convert(rgba,yuv));
-        CHECK(encoder->Encode(yuv)==video::EncodeResult::Produced);video::EncodedFrame f;CHECK(encoder->TryReceive(f));
-        CHECK(CompatibleAccessUnit(f));
+        REQUIRE((encoder->Configure(cfg) && pool.Configure(cfg.width,cfg.height) && converter.Configure(cfg.width,cfg.height)));
+        video::VideoFrame rgba,yuv;std::uint8_t* data;REQUIRE((pool.Acquire(rgba,data)));std::memset(data,127,rgba.storage->size());
+        rgba.frameId=id;rgba.framebufferGeneration=id;rgba.ptsUs=id*33333;REQUIRE((converter.Convert(rgba,yuv)));
+        REQUIRE((encoder->Encode(yuv)==video::EncodeResult::Produced));video::EncodedFrame f;REQUIRE((encoder->TryReceive(f)));
+        REQUIRE((CompatibleAccessUnit(f)));
     }
 }
 void LifecycleTest() {
-    auto pipeline=std::make_shared<video::VideoPipeline>();CHECK(pipeline->Configure({}));
+    auto pipeline=std::make_shared<video::VideoPipeline>();REQUIRE((pipeline->Configure({})));
     EncodedFrameHub hub(pipeline,{});
     for(int n=0;n<8;++n) {
-        auto s=hub.Create(std::string(31,'a')+char('a'+n));CHECK(s);
+        auto s=hub.Create(std::string(31,'a')+char('a'+n));REQUIRE((s));
         RtcSignal signal;bool offer=false;
         for(int i=0;i<200 && !offer;++i) {while(s->Poll(signal))if(signal.type=="offer")offer=true;std::this_thread::sleep_for(std::chrono::milliseconds(5));}
-        CHECK(offer);hub.Remove(s->id());
-        CHECK(!s->AddRemoteCandidate("candidate:1 1 UDP 1 127.0.0.1 50000 typ host","video"));
-        CHECK(!s->SetRemoteDescription("garbage"));CHECK(!s->RemoteIceComplete());
+        REQUIRE((offer));hub.Remove(s->id());
+        REQUIRE((!s->AddRemoteCandidate("candidate:1 1 UDP 1 127.0.0.1 50000 typ host","video")));
+        REQUIRE((!s->SetRemoteDescription("garbage")));REQUIRE((!s->RemoteIceComplete()));
     }
-    CHECK(hub.Snapshot().empty());
-    for(int n=0;n<3;++n) CHECK(hub.Create(std::string(31,'b')+char('a'+n))); // Destruct while negotiating.
+    REQUIRE((hub.Snapshot().empty()));
+    for(int n=0;n<3;++n) REQUIRE((hub.Create(std::string(31,'b')+char('a'+n)))); // Destruct while negotiating.
 }
 }
-int main(int argc,char** argv) {
-    try {
-        CHECK(argc==2);const std::string mode=argv[1];
-        if(mode=="clock")ClockTest();else if(mode=="packetizer")PacketTest();else if(mode=="feedback")FeedbackTest();
-        else if(mode=="sdp")SdpTest();else if(mode=="lifecycle")LifecycleTest();else CHECK(false);
-        std::cout<<"WebRTC "<<mode<<" passed\n";return 0;
-    } catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}
-}
+
+TEST_CASE("RTP timestamp clock", "[webrtc][clock]") { ClockTest(); }
+TEST_CASE("H264 RTP packetizer", "[webrtc][packetizer]") { PacketTest(); }
+TEST_CASE("RTCP feedback handling", "[webrtc][feedback]") { FeedbackTest(); }
+TEST_CASE("WebRTC SDP validation", "[webrtc][sdp]") { SdpTest(); }
+TEST_CASE("WebRTC session lifecycle", "[webrtc][lifecycle]") { LifecycleTest(); }

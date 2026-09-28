@@ -41,8 +41,8 @@ env -u DISPLAY -u WAYLAND_DISPLAY ctest --test-dir build -R headless_output_visu
 Intentional baseline updates are **manual**, never part of CTest:
 
 ```sh
-env -u DISPLAY -u WAYLAND_DISPLAY ./build/Release/bin/RenderModuleOutputTests visual headless --update-golden
+env -u DISPLAY -u WAYLAND_DISPLAY ./build/Release/bin/RenderModuleUpdateGolden
 ```
 
 Inspect the resulting image and review the diff before accepting it. Do not use
-this flag to hide an unexplained regression.
+the updater to hide an unexplained regression.

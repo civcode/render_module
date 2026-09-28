@@ -230,6 +230,21 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ~~~
 
+Native C++ regressions use Catch2 v3 while CTest remains the top-level runner
+that supplies process isolation, feature-specific environments, labels, and
+timeouts. Run one public test with `ctest --test-dir build -R '^input_queue$'`,
+or invoke a test binary directly with a Catch2 tag, for example
+`RenderModuleInputTests "[input][queue]"`. The dedicated
+`RenderModuleInputProtocolVectors` utility emits cross-language protocol vectors;
+it is not a test runner. Golden updates remain manual through
+`RenderModuleUpdateGolden` as documented in
+[tests/golden/README.md](tests/golden/README.md).
+
+Keep Catch2 assertions on the test thread: worker failures must be propagated
+through status or exceptions. Allocation-sensitive video tests must capture
+allocation counts immediately around production operations, outside Catch2
+assertion macros.
+
 Desktop tests need a display and OpenGL 3.3+. On Linux CI, run the full suite
 under `xvfb-run -a ctest --test-dir build --output-on-failure` with Xvfb/Mesa
 installed. Xvfb is only for Desktop tests: each headless test explicitly unsets

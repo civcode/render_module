@@ -1,3 +1,9 @@
+#ifdef RENDER_MODULE_GOLDEN_UPDATER
+#define REQUIRE(condition) do { if (!(condition)) \
+    throw std::runtime_error("Golden update check failed: " #condition); } while (false)
+#else
+#include <catch2/catch_test_macros.hpp>
+#endif
 #include <glad/glad.h>
 #include <imgui_internal.h>
 #include <stb_image.h> // Existing NanoVG decoder; no second implementation.
@@ -7,6 +13,7 @@
 #include "core/render_output.hpp"
 #include "platform/platform_backend.hpp"
 #include "present/image_presenter.hpp"
+#include "render_module_test_guard.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -19,22 +26,20 @@
 namespace {
 using namespace render_module;
 using namespace render_module::detail;
-#define CHECK(condition) do { if (!(condition)) \
-    throw std::runtime_error("Check failed: " #condition); } while (false)
 
 GLint Integer(GLenum name) { GLint value = 0; glGetIntegerv(name, &value); return value; }
 GLenum APIENTRY IncompleteFramebuffer(GLenum) { return GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT; }
 void Pixel(const ImageRgba& image, int x, int y, int r, int g, int b) {
     const auto offset = (std::size_t(y)*image.width + x)*4;
-    CHECK(std::abs(int(image.pixels[offset]) - r) <= 2);
-    CHECK(std::abs(int(image.pixels[offset+1]) - g) <= 2);
-    CHECK(std::abs(int(image.pixels[offset+2]) - b) <= 2);
+    REQUIRE((std::abs(int(image.pixels[offset]) - r) <= 2));
+    REQUIRE((std::abs(int(image.pixels[offset+1]) - g) <= 2));
+    REQUIRE((std::abs(int(image.pixels[offset+2]) - b) <= 2));
 }
 ImageRgba Decode(const std::string& path) {
     ImageRgba result;
     int components = 0;
     auto* pixels = stbi_load(path.c_str(), &result.width, &result.height, &components, 4);
-    CHECK(pixels != nullptr);
+    REQUIRE((pixels != nullptr));
     result.pixels.assign(pixels, pixels + std::size_t(result.width)*result.height*4);
     stbi_image_free(pixels);
     return result;
@@ -42,12 +47,12 @@ ImageRgba Decode(const std::string& path) {
 
 void RootTests(const Config& config) {
     auto platform = CreatePlatformBackend(config);
-    CHECK(platform && platform->Initialize(128, 96, "Root tests"));
-    CHECK(gladLoadGLLoader(platform->GetProcAddressLoader()));
+    REQUIRE((platform && platform->Initialize(128, 96, "Root tests")));
+    REQUIRE((gladLoadGLLoader(platform->GetProcAddressLoader())));
     {
         RootFramebuffer root;
-        CHECK(!root.Resize(0, 10) && !root.Resize(-1, 10));
-        CHECK(root.Framebuffer() == 0 && root.Generation() == 0);
+        REQUIRE((!root.Resize(0, 10) && !root.Resize(-1, 10)));
+        REQUIRE((root.Framebuffer() == 0 && root.Generation() == 0));
         GLuint sentinel = 0, texture = 0, unpack = 0;
         glGenFramebuffers(1, &sentinel);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, sentinel);
@@ -56,22 +61,22 @@ void RootTests(const Config& config) {
         glGenBuffers(1, &unpack);
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, unpack);
         glBufferData(GL_PIXEL_UNPACK_BUFFER, 4, nullptr, GL_STREAM_DRAW);
-        CHECK(root.Resize(64, 48));
-        CHECK(Integer(GL_READ_FRAMEBUFFER_BINDING) == GLint(sentinel));
-        CHECK(Integer(GL_DRAW_FRAMEBUFFER_BINDING) == 0);
-        CHECK(Integer(GL_TEXTURE_BINDING_2D) == GLint(texture));
-        CHECK(Integer(GL_PIXEL_UNPACK_BUFFER_BINDING) == GLint(unpack));
+        REQUIRE((root.Resize(64, 48)));
+        REQUIRE((Integer(GL_READ_FRAMEBUFFER_BINDING) == GLint(sentinel)));
+        REQUIRE((Integer(GL_DRAW_FRAMEBUFFER_BINDING) == 0));
+        REQUIRE((Integer(GL_TEXTURE_BINDING_2D) == GLint(texture)));
+        REQUIRE((Integer(GL_PIXEL_UNPACK_BUFFER_BINDING) == GLint(unpack)));
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
         root.BeginFrame();
-        CHECK(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+        REQUIRE((glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE));
         glBindTexture(GL_TEXTURE_2D, root.ColorTexture());
         GLint format = 0;
         glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &format);
-        CHECK(format == GL_RGBA8);
+        REQUIRE((format == GL_RGBA8));
         GLint depthType = -1;
         glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
                                               GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &depthType);
-        CHECK(depthType == GL_NONE);
+        REQUIRE((depthType == GL_NONE));
         const auto started = std::chrono::steady_clock::now();
         glClearColor(1, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -81,23 +86,23 @@ void RootTests(const Config& config) {
         glClear(GL_COLOR_BUFFER_BIT);
         glDisable(GL_SCISSOR_TEST);
         const auto frame = root.Complete(1, started, std::chrono::steady_clock::now());
-        CHECK(frame.IsValid() && frame.framebufferGeneration == 1);
-        CHECK(frame.renderCompleted >= frame.renderStarted);
+        REQUIRE((frame.IsValid() && frame.framebufferGeneration == 1));
+        REQUIRE((frame.renderCompleted >= frame.renderStarted));
         const GLuint oldFbo = root.Framebuffer(), oldTexture = root.ColorTexture();
-        CHECK(root.Resize(64, 48) && root.Generation() == 1 && frame.IsValid());
-        CHECK(!root.Resize(Integer(GL_MAX_TEXTURE_SIZE) + 1, 48));
-        CHECK(root.Framebuffer() == oldFbo && frame.IsValid());
+        REQUIRE((root.Resize(64, 48) && root.Generation() == 1 && frame.IsValid()));
+        REQUIRE((!root.Resize(Integer(GL_MAX_TEXTURE_SIZE) + 1, 48)));
+        REQUIRE((root.Framebuffer() == oldFbo && frame.IsValid()));
         // Exercise an actual allocation/completeness failure without exhausting
         // GPU memory. Restore GLAD's dispatch immediately after the operation.
         const auto checkStatus = glad_glCheckFramebufferStatus;
         glad_glCheckFramebufferStatus = &IncompleteFramebuffer;
         const bool resized = root.Resize(80, 60);
         glad_glCheckFramebufferStatus = checkStatus;
-        CHECK(!resized && root.Framebuffer() == oldFbo && root.ColorTexture() == oldTexture);
-        CHECK(root.Generation() == 1 && frame.IsValid());
-        CHECK(Integer(GL_READ_FRAMEBUFFER_BINDING) == GLint(oldFbo));
-        CHECK(Integer(GL_DRAW_FRAMEBUFFER_BINDING) == GLint(oldFbo));
-        CHECK(glGetError() == GL_NO_ERROR);
+        REQUIRE((!resized && root.Framebuffer() == oldFbo && root.ColorTexture() == oldTexture));
+        REQUIRE((root.Generation() == 1 && frame.IsValid()));
+        REQUIRE((Integer(GL_READ_FRAMEBUFFER_BINDING) == GLint(oldFbo)));
+        REQUIRE((Integer(GL_DRAW_FRAMEBUFFER_BINDING) == GLint(oldFbo)));
+        REQUIRE((glGetError() == GL_NO_ERROR));
 
         GLuint pack = 0;
         glGenBuffers(1, &pack);
@@ -109,20 +114,20 @@ void RootTests(const Config& config) {
         glPixelStorei(GL_PACK_SKIP_PIXELS, 3);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, sentinel);
         ImageRgba image;
-        CHECK(ImagePresenter::Read(frame, image));
-        CHECK(Integer(GL_READ_FRAMEBUFFER_BINDING) == GLint(sentinel));
-        CHECK(Integer(GL_DRAW_FRAMEBUFFER_BINDING) == GLint(oldFbo));
-        CHECK(Integer(GL_PIXEL_PACK_BUFFER_BINDING) == GLint(pack));
-        CHECK(Integer(GL_PACK_ALIGNMENT) == 8 && Integer(GL_PACK_ROW_LENGTH) == 999);
-        CHECK(Integer(GL_PACK_SKIP_ROWS) == 2 && Integer(GL_PACK_SKIP_PIXELS) == 3);
+        REQUIRE((ImagePresenter::Read(frame, image)));
+        REQUIRE((Integer(GL_READ_FRAMEBUFFER_BINDING) == GLint(sentinel)));
+        REQUIRE((Integer(GL_DRAW_FRAMEBUFFER_BINDING) == GLint(oldFbo)));
+        REQUIRE((Integer(GL_PIXEL_PACK_BUFFER_BINDING) == GLint(pack)));
+        REQUIRE((Integer(GL_PACK_ALIGNMENT) == 8 && Integer(GL_PACK_ROW_LENGTH) == 999));
+        REQUIRE((Integer(GL_PACK_SKIP_ROWS) == 2 && Integer(GL_PACK_SKIP_PIXELS) == 3));
         Pixel(image, 10, 0, 255, 0, 0); // Top row, exactly one flip.
         Pixel(image, 10, 47, 0, 0, 255);
         const std::string path = std::string(RENDER_MODULE_ARTIFACT_DIR) +
             (config.backend == Backend::Headless ? "/orientation-headless.png" : "/orientation-desktop.png");
-        CHECK(ImagePresenter::WritePng(path, image));
+        REQUIRE((ImagePresenter::WritePng(path, image)));
         const auto decoded = Decode(path);
-        CHECK(decoded.width == 64 && decoded.height == 48 && decoded.pixels == image.pixels);
-        CHECK(!ImagePresenter::WritePng("/nonexistent-render-module-directory/test.png", image));
+        REQUIRE((decoded.width == 64 && decoded.height == 48 && decoded.pixels == image.pixels));
+        REQUIRE((!ImagePresenter::WritePng("/nonexistent-render-module-directory/test.png", image)));
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         glPixelStorei(GL_PACK_ALIGNMENT, 4);
         glPixelStorei(GL_PACK_ROW_LENGTH, 0);
@@ -130,60 +135,60 @@ void RootTests(const Config& config) {
         glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
 
         glBindFramebuffer(GL_FRAMEBUFFER, oldFbo);
-        CHECK(root.Resize(80, 60));
-        CHECK(root.Generation() == 2 && !frame.IsValid());
-        CHECK(frame.Framebuffer() == 0 && frame.ColorTexture() == 0);
-        CHECK(!glIsFramebuffer(oldFbo) && !glIsTexture(oldTexture));
-        CHECK(Integer(GL_READ_FRAMEBUFFER_BINDING) == GLint(root.Framebuffer()));
-        CHECK(Integer(GL_DRAW_FRAMEBUFFER_BINDING) == GLint(root.Framebuffer()));
-        CHECK(Integer(GL_TEXTURE_BINDING_2D) == GLint(root.ColorTexture()));
-        CHECK(!ImagePresenter::Read(frame, image));
+        REQUIRE((root.Resize(80, 60)));
+        REQUIRE((root.Generation() == 2 && !frame.IsValid()));
+        REQUIRE((frame.Framebuffer() == 0 && frame.ColorTexture() == 0));
+        REQUIRE((!glIsFramebuffer(oldFbo) && !glIsTexture(oldTexture)));
+        REQUIRE((Integer(GL_READ_FRAMEBUFFER_BINDING) == GLint(root.Framebuffer())));
+        REQUIRE((Integer(GL_DRAW_FRAMEBUFFER_BINDING) == GLint(root.Framebuffer())));
+        REQUIRE((Integer(GL_TEXTURE_BINDING_2D) == GLint(root.ColorTexture())));
+        REQUIRE((!ImagePresenter::Read(frame, image)));
         root.BeginFrame();
         const auto next = root.Complete(2, started, std::chrono::steady_clock::now());
         root.BeginFrame();
-        CHECK(!next.IsValid());
+        REQUIRE((!next.IsValid()));
         const auto last = root.Complete(3, started, std::chrono::steady_clock::now());
         const auto finalFbo = root.Framebuffer();
         root.Destroy();
         root.Destroy();
-        CHECK(!last.IsValid() && last.Framebuffer() == 0 && !glIsFramebuffer(finalFbo));
-        CHECK(root.Width() == 0 && root.Height() == 0);
+        REQUIRE((!last.IsValid() && last.Framebuffer() == 0 && !glIsFramebuffer(finalFbo)));
+        REQUIRE((root.Width() == 0 && root.Height() == 0));
         glDeleteBuffers(1, &pack);
         glDeleteBuffers(1, &unpack);
         glDeleteTextures(1, &texture);
         glDeleteFramebuffers(1, &sentinel);
-        CHECK(glGetError() == GL_NO_ERROR);
+        REQUIRE((glGetError() == GL_NO_ERROR));
     }
     platform->Shutdown();
 }
 
 void ResizeTests(const Config& config) {
-    CHECK(RenderModule::Init(config));
+    REQUIRE((RenderModule::Init(config)));
     ImGui::GetIO().IniFilename = nullptr;
-    CHECK(!RenderModule::SaveScreenshot("before-frame.png"));
-    CHECK(!RequestVirtualDisplaySize(0, 20));
+    REQUIRE((!RenderModule::SaveScreenshot("before-frame.png")));
+    REQUIRE((!RequestVirtualDisplaySize(0, 20)));
     int frames = 0, canvasFrames = 0;
     GLint expectedRoot = 0;
     RenderModule::RegisterImGuiCallback([&] {
         ++frames;
         expectedRoot = Integer(GL_DRAW_FRAMEBUFFER_BINDING);
-        CHECK(expectedRoot != 0);
+        REQUIRE((expectedRoot != 0));
         const int width = frames < 3 ? config.width : 800;
         const int height = frames < 3 ? config.height : 600;
-        CHECK(ImGui::GetIO().DisplaySize.x == width && ImGui::GetIO().DisplaySize.y == height);
-        CHECK(RenderModule::GetWindowSize().x == width);
+        REQUIRE((ImGui::GetIO().DisplaySize.x == width && ImGui::GetIO().DisplaySize.y == height));
+        REQUIRE((RenderModule::GetWindowSize().x == width));
         ImGui::SetNextWindowPos({0, 0}, ImGuiCond_Always);
         ImGui::SetNextWindowSize({float(width), float(height)}, ImGuiCond_Always);
         ImGui::Begin("Resize canvas"); ImGui::End();
-        if (frames == 2) CHECK(RequestVirtualDisplaySize(800, 600));
+        if (frames == 2) REQUIRE((RequestVirtualDisplaySize(800, 600)));
         if (frames == 5) RenderModule::RequestClose();
         ImGui::GetForegroundDrawList()->AddCallback([](const ImDrawList*, const ImDrawCmd* cmd) {
-            CHECK(Integer(GL_DRAW_FRAMEBUFFER_BINDING) == *static_cast<GLint*>(cmd->UserCallbackData));
+            REQUIRE((Integer(GL_DRAW_FRAMEBUFFER_BINDING) == *static_cast<GLint*>(cmd->UserCallbackData)));
         }, &expectedRoot);
     });
     RenderModule::RegisterCanvas("Resize canvas", [&](Canvas& canvas) {
         ++canvasFrames;
-        if (frames >= 3) CHECK(canvas.Size().x > config.width);
+        if (frames >= 3) REQUIRE((canvas.Size().x > config.width));
         nvgBeginPath(canvas.Graphics());
         nvgRect(canvas.Graphics(), 0, 0, 50, 50);
         nvgFillColor(canvas.Graphics(), nvgRGB(255, 0, 0));
@@ -191,24 +196,24 @@ void ResizeTests(const Config& config) {
     });
     RenderModule::RegisterCanvas("Restoration probe", [](Canvas&) {}, [&](NVGcontext*) {
         // Includes first-time Canvas FBO allocation and resize, not only reuse.
-        CHECK(Integer(GL_DRAW_FRAMEBUFFER_BINDING) == expectedRoot);
-        CHECK(Integer(GL_READ_FRAMEBUFFER_BINDING) == expectedRoot);
+        REQUIRE((Integer(GL_DRAW_FRAMEBUFFER_BINDING) == expectedRoot));
+        REQUIRE((Integer(GL_READ_FRAMEBUFFER_BINDING) == expectedRoot));
         RenderModule::IsolatedFrameBuffer([](NVGcontext*) { glBindFramebuffer(GL_FRAMEBUFFER, 0); });
-        CHECK(Integer(GL_DRAW_FRAMEBUFFER_BINDING) == expectedRoot);
+        REQUIRE((Integer(GL_DRAW_FRAMEBUFFER_BINDING) == expectedRoot));
     });
     RenderModule::Run();
-    CHECK(frames == 5 && canvasFrames > 0);
+    REQUIRE((frames == 5 && canvasFrames > 0));
     const auto frame = CompletedFrame();
-    CHECK(frame.IsValid() && frame.width == 800 && frame.height == 600);
-    CHECK(frame.framebufferGeneration == 2 && frame.frameId == 5);
-    CHECK(RenderModule::SaveScreenshot(std::string(RENDER_MODULE_ARTIFACT_DIR) + "/resized.png"));
-    CHECK(glGetError() == GL_NO_ERROR);
+    REQUIRE((frame.IsValid() && frame.width == 800 && frame.height == 600));
+    REQUIRE((frame.framebufferGeneration == 2 && frame.frameId == 5));
+    REQUIRE((RenderModule::SaveScreenshot(std::string(RENDER_MODULE_ARTIFACT_DIR) + "/resized.png")));
+    REQUIRE((glGetError() == GL_NO_ERROR));
     RenderModule::Shutdown();
-    CHECK(!frame.IsValid() && frame.Framebuffer() == 0);
+    REQUIRE((!frame.IsValid() && frame.Framebuffer() == 0));
 }
 
 void Compare(const ImageRgba& actual, const ImageRgba& golden, const std::string& path) {
-    CHECK(actual.width == golden.width && actual.height == golden.height);
+    REQUIRE((actual.width == golden.width && actual.height == golden.height));
     ImageRgba difference = actual;
     double totalError = 0;
     std::size_t differing = 0;
@@ -235,7 +240,7 @@ void Compare(const ImageRgba& actual, const ImageRgba& golden, const std::string
 }
 
 void VisualTest(const Config& config, bool updateGolden) {
-    CHECK(RenderModule::Init(config));
+    REQUIRE((RenderModule::Init(config)));
     auto& io = ImGui::GetIO();
     io.IniFilename = nullptr;
     io.ConfigWindowsResizeFromEdges = false;
@@ -310,14 +315,14 @@ void VisualTest(const Config& config, bool updateGolden) {
         view.Axes("axes", {}, 1.2f);
     }, options);
     RenderModule::Run();
-    CHECK(frames == 5 && canvasFrames >= 4 && viewFrames >= 4);
+    REQUIRE((frames == 5 && canvasFrames >= 4 && viewFrames >= 4));
     const auto frame = CompletedFrame();
-    CHECK(frame.IsValid());
+    REQUIRE((frame.IsValid()));
     ImageRgba actual;
-    CHECK(ImagePresenter::Read(frame, actual));
+    REQUIRE((ImagePresenter::Read(frame, actual)));
     const std::string path = std::string(RENDER_MODULE_ARTIFACT_DIR) + "/root-ui-actual.png";
-    CHECK(RenderModule::SaveScreenshot(path)); // Keep diagnostics even if a semantic assertion fails.
-    CHECK(frame.width == 640 && frame.height == 480 && frame.frameId == 5);
+    REQUIRE((RenderModule::SaveScreenshot(path))); // Keep diagnostics even if a semantic assertion fails.
+    REQUIRE((frame.width == 640 && frame.height == 480 && frame.frameId == 5));
     Pixel(actual, 6, 6, 255, 0, 0);
     Pixel(actual, 6, 474, 0, 0, 255);
     // Large saturated regions additionally guard against a missing Canvas/View3D.
@@ -329,37 +334,63 @@ void VisualTest(const Config& config, bool updateGolden) {
         yellow += r > 220 && g > 160 && b < 80;
         cyan += r < 100 && g > 100 && b > 150;
     }
-    CHECK(red > 2000 && yellow > 2000 && cyan > 1000);
+    REQUIRE((red > 2000 && yellow > 2000 && cyan > 1000));
     const auto decoded = Decode(path);
-    CHECK(decoded.width == 640 && decoded.height == 480 && decoded.pixels == actual.pixels);
-    if (updateGolden) CHECK(ImagePresenter::WritePng(RENDER_MODULE_GOLDEN_PATH, actual));
+    REQUIRE((decoded.width == 640 && decoded.height == 480 && decoded.pixels == actual.pixels));
+    if (updateGolden) REQUIRE((ImagePresenter::WritePng(RENDER_MODULE_GOLDEN_PATH, actual)));
     else Compare(actual, Decode(RENDER_MODULE_GOLDEN_PATH), path);
-    CHECK(glGetError() == GL_NO_ERROR);
+    REQUIRE((glGetError() == GL_NO_ERROR));
     RenderModule::Shutdown();
-    CHECK(!frame.IsValid());
+    REQUIRE((!frame.IsValid()));
+}
+Config OutputConfig(bool headless) {
+    Config config;
+    config.width = 640;
+    config.height = 480;
+    config.fps = 0;
+    if (headless) {
+        REQUIRE((std::getenv("DISPLAY") == nullptr && std::getenv("WAYLAND_DISPLAY") == nullptr));
+        config.backend = Backend::Headless;
+        config.headlessContext = HeadlessContext::NativeEgl;
+    }
+    return config;
 }
 } // namespace
 
-int main(int argc, char** argv) {
+#ifndef RENDER_MODULE_GOLDEN_UPDATER
+TEST_CASE("Root framebuffer Desktop", "[output][root][desktop]") {
+    RenderModuleTestGuard cleanup;
+    std::filesystem::create_directories(RENDER_MODULE_ARTIFACT_DIR);
+    RootTests(OutputConfig(false));
+}
+
+TEST_CASE("Root framebuffer headless", "[output][root][headless]") {
+    RenderModuleTestGuard cleanup;
+    std::filesystem::create_directories(RENDER_MODULE_ARTIFACT_DIR);
+    RootTests(OutputConfig(true));
+}
+
+TEST_CASE("Root resize headless", "[output][resize][headless]") {
+    RenderModuleTestGuard cleanup;
+    std::filesystem::create_directories(RENDER_MODULE_ARTIFACT_DIR);
+    ResizeTests(OutputConfig(true));
+}
+
+TEST_CASE("Root visual regression headless", "[output][visual][headless]") {
+    RenderModuleTestGuard cleanup;
+    std::filesystem::create_directories(RENDER_MODULE_ARTIFACT_DIR);
+    VisualTest(OutputConfig(true), false);
+}
+#else
+int main() {
     try {
-        CHECK(argc >= 3);
+        RenderModuleTestGuard cleanup;
         std::filesystem::create_directories(RENDER_MODULE_ARTIFACT_DIR);
-        Config config;
-        config.width = 640; config.height = 480; config.fps = 0;
-        if (std::string(argv[2]) == "headless") {
-            CHECK(std::getenv("DISPLAY") == nullptr && std::getenv("WAYLAND_DISPLAY") == nullptr);
-            config.backend = Backend::Headless;
-            config.headlessContext = HeadlessContext::NativeEgl;
-        } else CHECK(std::string(argv[2]) == "desktop");
-        const std::string test = argv[1];
-        if (test == "root") RootTests(config);
-        else if (test == "resize") ResizeTests(config);
-        else if (test == "visual") VisualTest(config, argc == 4 && std::string(argv[3]) == "--update-golden");
-        else CHECK(false);
+        VisualTest(OutputConfig(true), true);
         return 0;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "%s\n", error.what());
-        RenderModule::Shutdown();
         return 1;
     }
 }
+#endif
