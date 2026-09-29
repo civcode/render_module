@@ -119,16 +119,21 @@ or the demo's `--frames` option. OSMesa and async PBO readback are not implement
 
 ## Embedded browser UI (Phase 5)
 
-The diagnostic **WebSocket image transport** supports JPEG and PNG; it is not
-production video. Web reuses the headless context, root framebuffer and Phase 4
-input queue, with no Desktop window. JPEG is the smaller/faster realtime default.
-PNG is lossless and intended for exact UI inspection, static/low-motion screens and
-screenshot comparison. Optional [WebRTC](WEBRTC.md) remains the recommended realtime
-H.264 path with [DataChannel input](INPUT_PROTOCOL.md). WebSocket image mode retains
-WebSocket input.
+The Web backend now serves one frontend that can switch each browser session live between
+**JPEG**, **PNG**, and (when built) **H.264**. JPEG/PNG are binary images over WebSocket;
+H.264 is low-latency WebRTC media. The authenticated WebSocket remains connected in every
+mode and is the session/control/WebRTC-signaling backbone. JPEG/PNG use WebSocket JSON
+input; H.264 uses the WebRTC DataChannels described in [INPUT_PROTOCOL.md](INPUT_PROTOCOL.md).
 
-Install system Boost >=1.75 (System/JSON development packages) and libjpeg
-development files; tested with Boost 1.83 and libjpeg-turbo 2.1.5. Then:
+JPEG is the smaller/faster image default. PNG is lossless and useful for exact UI
+inspection, static/low-motion screens and screenshot comparison. H.264 is the normal
+realtime-video choice when WebRTC is enabled. The page exposes a compact `JPEG | PNG |
+H.264` selector and shows the derived implementation detail in its footer (`JPEG ·
+WebSocket`, `PNG · WebSocket`, or `H.264 · WebRTC`). Different viewers may choose different
+streams simultaneously.
+
+Install system Boost >=1.75 (System/JSON development packages) and libjpeg development
+files; tested with Boost 1.83 and libjpeg-turbo 2.1.5. Then:
 
 ~~~sh
 cmake -S . -B build-web -DCMAKE_BUILD_TYPE=Release \
@@ -138,36 +143,41 @@ cmake --build build-web --parallel
 # Optional authentication; do not place secrets in command-line arguments/URLs.
 export RENDER_MODULE_WEB_TOKEN="$(openssl rand -hex 16)"
 env -u DISPLAY -u WAYLAND_DISPLAY ./build-web/Release/bin/RenderModule3DDemo \
-  --render-backend web --headless-context native-egl --web-port 8080
+  --render-backend web --headless-context native-egl --web-port 8080 \
+  --web-stream jpeg
 ~~~
 
-Open `http://127.0.0.1:8080/` and enter the configured token. Without a token,
-loopback operation is permitted. In C++, select `Config.backend = Backend::Web`
-and set `Config.web`; environment token handling above belongs to the demo only.
-Defaults: 20 image fps, JPEG quality 80, max 1920×1080, eight clients and a
-FirstConnected controller with automatic promotion. JPEG remains default. Select PNG:
+Open `http://127.0.0.1:8080/` and enter the configured token. Without a token, loopback
+operation is permitted. In C++, select `Config.backend = Backend::Web` and configure the
+**initial** stream:
 
 ```cpp
 config.backend = render_module::Backend::Web;
-config.web.transport = render_module::WebTransport::JpegWebSocket; // Legacy enum name: WebSocket image mode.
-config.web.imageCodec = render_module::WebSocketImageCodec::Png;
+config.web.initialStream = render_module::WebStreamMode::Png;
 ```
 
-The demo equivalent is `--web-transport jpeg --web-image-codec png`. The render
-cadence remains `Config.fps`; PNG has no quality setting and may not sustain 20 fps
-at 1080p.
+The demo equivalent is `--web-stream png`. Allowed values are `jpeg`, `png`, and `h264`;
+`h264` requires a working WebRTC/video build. This setting only chooses what a newly
+connected browser starts with. Users can switch modes on the page without reconnecting the
+WebSocket or losing their session/controller lease.
 
-The embedded vanilla JS client supports Pointer Events/capture, physical keys,
-committed Unicode/IME/paste, normalized wheel input, debounced viewport requests,
-reconnect and input-state recovery. Viewers cannot send input or resize. HTTP
+Defaults: initial JPEG, 20 stream fps, JPEG quality 80, max 1920×1080, eight clients and a
+FirstConnected controller with automatic promotion. PNG has no quality setting and may not
+sustain 20 fps at 1080p. The presenter is demand-driven: JPEG and PNG viewers share one
+RGBA readback; H.264 capture runs only while an H.264 session exists.
+
+The embedded vanilla JS client supports Pointer Events/capture, physical keys, committed
+Unicode/IME/paste, normalized wheel input, debounced viewport requests, runtime stream
+switching, reconnect and input-state recovery. Viewers cannot send input or resize. HTTP
 assets require no Node/npm or asset directory at runtime. `/healthz` is public;
-`/api/version` exposes authenticated version/build/protocol and bounded counters.
+`/api/version` exposes authenticated version/build/protocol, available streams, per-stream
+session counts and bounded counters.
 
-Default binding is **127.0.0.1**. Non-loopback binds require explicit allowed
-Origins and authentication, unless unauthenticated exposure is explicitly enabled.
-The server is plaintext HTTP/WS: use TLS termination/tunneling for remote access.
-See [WEB_PROTOCOL.md](WEB_PROTOCOL.md) for the wire format, limits, thread/lifetime
-boundaries, lease/auth/Origin/resize/input policies and known limitations.
+Default binding is **127.0.0.1**. Non-loopback binds require explicit allowed Origins and
+authentication, unless unauthenticated exposure is explicitly enabled. The server is
+plaintext HTTP/WS: use TLS termination/tunneling for remote access. See
+[WEB_PROTOCOL.md](WEB_PROTOCOL.md) for the v2 control protocol, image framing, switching
+state machine, limits and security policies.
 
 ### Browser tests (development only)
 
@@ -207,20 +217,27 @@ and asynchronous PBOs are not implemented.
 
 ## Optional WebRTC H.264 video and DataChannel input (Phases 7–8)
 
-Enable `RENDER_MODULE_ENABLE_WEBRTC=ON` together with WEB, VIDEO and OPENH264.
-This adds pinned libdatachannel 0.24.5, libnice ICE and OpenSSL DTLS; CMake >=3.21
-and libnice/OpenSSL development packages are required. Select
-`config.web.transport = WebTransport::WebRtc` or the 3D demo's
-`--web-transport webrtc`. JPEG remains the default/explicit diagnostic fallback.
+Enable `RENDER_MODULE_ENABLE_WEBRTC=ON` together with WEB, VIDEO and OPENH264. This adds
+pinned libdatachannel 0.24.5, libnice ICE and OpenSSL DTLS; CMake >=3.21 and libnice/OpenSSL
+development packages are required.
 
-The embedded browser decodes H.264 in a real video element. One software encoder
-serves multiple independent WebRTC peers; resize, controller/input/Unicode and
-reconnect retain the earlier architecture. UDP/TCP TURN relay paths are tested;
-**TURN/TLS is rejected** because this libnice backend does not implement real TLS.
-See [WEBRTC.md](WEBRTC.md) for negotiation, bounds, pins, measurements, browser/loss
-coverage and deployment recipes. [INPUT_PROTOCOL.md](INPUT_PROTOCOL.md) documents
-Phase 8's binary input/control protocol, controller recovery and bounded queues.
-Production WebSocket is signaling-only. **Phase 9/PBO readback has not started.**
+WebRTC is now an **H.264 stream capability**, not an exclusive server transport. With the
+capability available, every browser's stream selector gains `H.264`, and
+`config.web.initialStream = WebStreamMode::H264` / `--web-stream h264` merely chooses it as
+the initial mode. JPEG and PNG remain available concurrently to other sessions. The same
+authenticated WebSocket carries stream control and WebRTC signaling throughout.
+
+The embedded browser decodes H.264 in a real video element. One software encoder serves
+multiple independent WebRTC peers; resize, controller/input/Unicode and normal reconnect
+retain the earlier architecture. A session can switch `H.264 -> JPEG/PNG -> H.264` without
+reloading the page or replacing its WebSocket. The server tears down/recreates only that
+session's WebRTC peer and safely hands input authority between DataChannel and WebSocket.
+
+UDP/TCP TURN relay paths are tested; **TURN/TLS is rejected** because this libnice backend
+does not implement real TLS. See [WEBRTC.md](WEBRTC.md) for negotiation, bounds, pins,
+measurements, browser/loss coverage and deployment recipes. [INPUT_PROTOCOL.md](INPUT_PROTOCOL.md)
+documents the binary DataChannel input/control protocol. **Phase 9/PBO readback has not
+started.**
 
 ### Regression tests
 

@@ -1,12 +1,13 @@
 # Phase 8 — DataChannel input/control v1
 
-WebRTC mode now uses two **server-created** channels on the existing H.264
+A session committed to the H.264 stream uses two **server-created** channels on its
 PeerConnection, created before the offer. The browser never creates a channel.
-Authentication, cookie/Origin validation and offer/answer/ICE remain on `/api/ws`.
-`welcome.inputTransport` explicitly selects `datachannel-v1` (WebRTC) or
-`websocket-json-v1` (diagnostic JPEG). WebRTC sessions reject **all** WS input,
-viewport and frame-ACK messages, including those from the controller. There is no
-silent fallback or duplicate delivery. Select JPEG mode explicitly for WS diagnostics.
+Authentication, cookie/Origin validation, runtime stream control and offer/answer/ICE
+remain on the persistent `/api/ws` connection. `welcome.inputTransport` /
+`stream_changed.inputTransport` select `datachannel-v1` for H.264 or
+`websocket-json-v1` for JPEG/PNG. H.264 sessions reject ordinary WS input and frame ACKs.
+When switching back to JPEG/PNG the server disables DataChannel authority and releases
+held state before WS input becomes authoritative, so there is no duplicate delivery.
 
 | Label | Ordering | Reliability | Messages |
 |---|---|---|---|
@@ -168,7 +169,7 @@ controller transfer, saturation and 100,000 deterministic random/structured pars
 mutations. ASan+UBSan runs cover that CPU parser/state/Phase 4 queue test, not the
 entire WebRTC stack. Browser tests exercise real decoded H.264 and DataChannel
 click/text/orbit/resize, two viewers, forged viewer input/resize, explicit lease
-transfer, control-channel loss, reconnect and signaling-only WS traffic.
+transfer, control-channel loss, reconnect, live H.264/image switching and H.264 signaling-only WS traffic.
 
 The browser harness independently drops 1%/3% of fast **application send attempts**
 and delays one move at a time by 100 ms. It verifies continued reliable clicks and

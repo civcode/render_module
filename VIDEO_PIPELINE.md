@@ -1,9 +1,10 @@
 # Phase 6 — software realtime video
 
 **Transport boundary: owned H.264 access units, not networking.** The optional
-[Phase 7 adapter](WEBRTC.md) consumes this unchanged interface for WebRTC media.
-JPEG/PNG WebSocket images remain the explicit diagnostic transport. PBOs, hardware encoders
-and congestion adaptation are not implemented.
+[Phase 7 adapter](WEBRTC.md) consumes this unchanged interface for the unified Web
+frontend's H.264 stream. JPEG/PNG image streams remain independent WebSocket outputs and
+may be active for other browser sessions at the same time. PBOs, hardware encoders and
+congestion adaptation are not implemented.
 
 ```text
 RootFramebuffer → synchronous CPU Frame Capture (render thread, one flip)
