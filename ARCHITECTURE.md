@@ -247,35 +247,55 @@ and [Unicode configuration](https://github.com/ocornut/imgui/blob/v1.91.9b-docki
 ## Embedded Web UI (Phase 5)
 
 ```text
-RootFramebuffer → WebPresenter → ImagePresenter::Read (one top-down RGBA frame)
-                                           ↓
-                                ImageEncoder (JPEG | PNG)
-                                           ↓
-Browser canvas ← binary WebSocket image ← shared WebServer/session/backpressure
-Browser input → JSON WebSocket → controller/validation → RemoteInputQueue
-                                                            ↓ render thread
-                                                    RemoteInputBackend → ImGui
+                              persistent authenticated WebSocket
+                           session / control / WebRTC signaling
+                                         |
+RootFramebuffer -> WebPresenter ---------+------------------------------+
+                  |                      |                              |
+                  |              JPEG / PNG stream                 H.264 stream
+                  |                      |                              |
+                  |        one shared ImagePresenter read       VideoCapture read
+                  |                 /          \\                        |
+                  |              JPEG          PNG                 VideoPipeline
+                  |                 \          /                        |
+                  +---------- codec mailboxes                         WebRTC
+                                    |                                  |
+Browser canvas <----------- binary WebSocket                       browser video
+Browser input ------------> JSON WebSocket             DataChannel input <------+
+                                    \                                /
+                                     +---- controller/validation ---+
+                                                    |
+                                             RemoteInputQueue
+                                                    |
+                                             RemoteInputBackend
 ```
 
-`Backend::Web` selects an existing headless provider, the existing input backend,
-and `WebPresenter`. `IPresenter::PrepareFrame()` consumes the latest viewport
-request at a render boundary; normal rendering is otherwise unchanged. Selected-codec
-readback/encoding is synchronous and capped independently of render fps. JPEG and PNG
-share the one readback, packet mailbox, ACK and session code. No GL
-work or borrowed framebuffer handle crosses into the network thread.
+`Backend::Web` selects an existing headless provider, the existing input backend and one
+`WebPresenter`. The WebSocket is the stable lifetime anchor for every browser session. A
+session owns a mutable `WebStreamMode` (`Jpeg`, `Png`, `H264`); media transport is derived
+from that choice rather than configured as an independent server mode.
 
-Boost.Beast/Asio and Boost.JSON stay private in `src/web/`; the presenter does not
-expose their types. Vanilla assets are compiled into the library. HTTP/WebSocket
-sessions have bounded parsing, write/control/frame queues and shutdown deadlines.
-FirstConnected controller authority, exact Origin checks and token/cookie
-validation are server-enforced. Controller loss/saturation invokes Phase 4's
-release-all cancellation barrier; no alternate ImGui or camera path is introduced.
+`IPresenter::PrepareFrame()` consumes the latest viewport request at a render boundary.
+`Present()` queries atomic stream demand. JPEG and PNG active together share one
+synchronous RGBA readback and are encoded once per required codec; separate immutable
+latest mailboxes let sessions consume different image codecs independently. H.264 capture
+is submitted only while H.264 has subscribers. The first implementation deliberately
+keeps the image and H.264 readbacks separate when both families are active.
 
-See [WEB_PROTOCOL.md](WEB_PROTOCOL.md) for protocol v1, explicit bounds, security,
-viewport negotiation, input details, diagnostics and test coverage. **JPEG/PNG WS is
-an explicit diagnostic image transport**; Phase 7 adds optional WebRTC media. Phase 6
-software video remains transport-independent. Phase 8 adds DataChannel input;
-PBOs and hardware encoding are not implemented.
+Stream state, controller ownership, image ACK draining and WebRTC peer lifetime belong to
+the network thread. A normal stream switch does not replace the authenticated WebSocket or
+controller lease. Image -> H.264 and H.264 -> image transitions release held input before
+changing authoritative input paths, so there is never a production dual-input window.
+
+Boost.Beast/Asio and Boost.JSON stay private in `src/web/`; the presenter does not expose
+their types. Vanilla assets are compiled into the library. HTTP/WebSocket sessions retain
+bounded parsing, write/control/frame queues and shutdown deadlines. Exact Origin and
+token/cookie validation remain server-enforced.
+
+See [WEB_PROTOCOL.md](WEB_PROTOCOL.md) for control protocol v2, stream selection,
+backpressure, capability discovery, security and diagnostics. Phase 6 software video
+remains transport-independent; Phase 7 supplies the optional H.264 WebRTC capability and
+Phase 8 its DataChannel input. PBOs and hardware encoding are not implemented.
 
 ## Software realtime video (Phase 6)
 
@@ -304,8 +324,9 @@ One pending raw frame is replaceable; one encoded output slot applies backpressu
 Dependent P access units are not arbitrarily dropped. Resolution commands invalidate
 old pending/output data and suppress old in-flight completion before recreating the
 codec and producing an IDR. All GL remains on the render thread; shutdown needs no
-GL context on the worker. WebSocket image transport remains independent; when both
-outputs are active, their synchronous readbacks currently remain separate.
+GL context on the worker. The unified Web presenter may produce image and H.264 output in
+the same render cadence for different sessions; those two output families currently use
+separate synchronous readbacks.
 
 See [VIDEO_PIPELINE.md](VIDEO_PIPELINE.md) for precise color/framing/timebase,
 configuration, ownership/drop and control contracts. H.264 bytes are never sent
@@ -313,26 +334,28 @@ through WebSocket.
 
 ## WebRTC media (Phase 7)
 
-`WebPresenter` selects either WebSocket image encoding (JPEG/PNG) or an owned Phase 6 pipeline/capture bridge.
-A CPU fanout worker drains complete access units, copies each once to release the
-encoder pool, then shares immutable storage across sessions. Every session owns a
-PeerConnection, send-only H.264 track, packetizer, SSRC, RTP clock/sequence, bounded
+When WebRTC/video capability initializes successfully, `WebPresenter` keeps one Phase 6
+pipeline/capture bridge available as a capability. It does **not** make the whole Web
+backend a WebRTC mode. `WebServer::Session` creates an individual `WebRtcSession` when that
+browser commits H.264 and removes it when the browser returns to JPEG/PNG or disconnects.
+
+A CPU fanout worker drains complete access units, copies each once to release the encoder
+pool, then shares immutable storage across active H.264 sessions. Every H.264 session owns
+a PeerConnection, send-only H.264 track, packetizer, SSRC, RTP clock/sequence, bounded
 NACK history and RTCP state. One active/one pending AU per independent sender worker
-isolates slow viewers; dropped dependency chains wait for a fresh IDR. Ready/PLI
-requests share one coalescing `VideoStreamController`. REMB is observation only;
-no unbounded pacing queue is introduced.
+isolates slow viewers; dropped dependency chains wait for a fresh IDR. Ready/PLI requests
+share one coalescing `VideoStreamController`. REMB remains observation only.
 
-The existing authenticated WebSocket carries bounded versioned offer/answer/ICE
-signaling only in WebRTC mode. Phase 8 input/viewport messages use two DataChannels.
-Signaling, input authorization and close remain serialized on the WS I/O thread;
-library callbacks use weak ownership and bounded event queues.
-Media failure/disconnect tears down that session and invokes existing controller
-release-all recovery. Render/GL ownership and Phase 6 public interfaces are unchanged.
+The persistent authenticated WebSocket carries bounded versioned offer/answer/ICE signaling
+only for sessions currently committed to H.264. Phase 8 input/viewport messages then use
+two DataChannels. Leaving H.264 disables DataChannel authority, releases held input and
+tears down that peer before WebSocket input becomes authoritative again. Recoverable media
+failure returns that browser session to its previous image stream rather than forcing a
+new authenticated WebSocket connection.
 
-The browser's video dimensions drive image/input mapping; root resize changes the
-in-band SPS/PPS/IDR without renegotiating a healthy peer. Dependencies and the two
-libnice caveats (relay-policy build patch, unsupported TURN/TLS) are documented in
-[WEBRTC.md](WEBRTC.md).
+The browser's video dimensions drive content/input mapping; root resize changes in-band
+SPS/PPS/IDR without renegotiating a healthy peer. Dependencies and the libnice relay/TURN
+caveats are documented in [WEBRTC.md](WEBRTC.md).
 
 ## DataChannel input/control (Phase 8)
 
@@ -344,7 +367,7 @@ Reliable absolute positions and fast-sequence fences prevent late moves rewindin
 clicks or snapshots. Queue failure invokes ReleaseAll and an epoch-tagged resync;
 controller transfer always requires a fresh snapshot. Browser motion has one
 replaceable unsent slot, while reliable queues are bounded and fail closed.
-Explicit WebSocket image mode retains WS input; there is no production dual-input path.
+JPEG/PNG streams use WebSocket input; H.264 uses DataChannels. There is no production dual-input path.
 See [INPUT_PROTOCOL.md](INPUT_PROTOCOL.md) for the wire table, authority, deadlines,
 backpressure, RTT diagnostics and tests. **Phase 9/PBO readback remains unstarted.**
 

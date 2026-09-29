@@ -1,18 +1,20 @@
 # Phase 7 — H.264 WebRTC video
 
-`RootFramebuffer → VideoCapture → Phase 6 VideoPipeline → EncodedFrame →
-per-viewer libdatachannel H264RtpPacketizer → DTLS/SRTP → browser <video>`.
+`RootFramebuffer -> VideoCapture -> Phase 6 VideoPipeline -> EncodedFrame ->
+per-viewer libdatachannel H264RtpPacketizer -> DTLS/SRTP -> browser <video>`.
 
-[Phase 8 input/control](INPUT_PROTOCOL.md) uses two DataChannels on this same peer.
-The authenticated WebSocket now carries signaling only; explicit WebSocket image
-mode (JPEG or PNG) retains WebSocket input. Audio, hardware encoding, PBOs, adaptation, simulcast and SFUs are
-not implemented. Phase 6 public interfaces and encoding/conversion are unchanged.
+H.264/WebRTC is one stream capability inside the unified Web frontend. The authenticated
+WebSocket remains connected for the lifetime of the browser session and carries stream
+control plus WebRTC signaling. While H.264 is committed, ordinary input is exclusively on
+the two [Phase 8 DataChannels](INPUT_PROTOCOL.md); switching back to JPEG/PNG tears down
+that peer and restores WebSocket JSON input without replacing the WebSocket session.
+Audio, hardware encoding, PBOs, adaptation, simulcast and SFUs are not implemented.
 
 ## Build and select
 
 In addition to the [Web](WEB_PROTOCOL.md) and [Video](VIDEO_PIPELINE.md) dependencies,
-install CMake >=3.21, OpenSSL development files and libnice >=0.1.19 development
-files (including GLib/GIO). Tested: libnice 0.1.21, OpenSSL 3.0.13, Linux x86-64.
+install CMake >=3.21, OpenSSL development files and libnice >=0.1.19 development files
+(including GLib/GIO). Tested: libnice 0.1.21, OpenSSL 3.0.13, Linux x86-64.
 
 ```sh
 cmake -S . -B build-rtc -DCMAKE_BUILD_TYPE=Release \
@@ -22,23 +24,33 @@ cmake -S . -B build-rtc -DCMAKE_BUILD_TYPE=Release \
 cmake --build build-rtc --parallel
 export RENDER_MODULE_WEB_TOKEN="$(openssl rand -hex 16)"
 env -u DISPLAY -u WAYLAND_DISPLAY build-rtc/Release/bin/RenderModule3DDemo \
-  --render-backend web --headless-context native-egl --web-transport webrtc
+  --render-backend web --headless-context native-egl --web-stream h264
 ```
 
-Or set `config.backend = Backend::Web` and
-`config.web.transport = WebTransport::WebRtc` before `RenderModule::Init(config)`.
-The default remains the legacy-named `WebTransport::JpegWebSocket`; `--web-transport
-jpeg` selects WebSocket image mode, and `--web-image-codec jpeg|png` selects its codec.
-These are separate modes, not simultaneous video transports.
-WebRTC requires even initial dimensions >=16, maxima <=1920×1080 and 1–30 fps.
-Viewport requests are fitted to the maxima, floored to even dimensions, minimum
-16 per axis. This avoids a cropped-video/root-input coordinate mismatch.
-Capture defaults to 20 fps; render cadence is independent. No viewers means no
-capture. No automatic downgrade to WebSocket images, resolution ladder or bitrate adaptation.
+Or set:
 
-`WEBRTC=OFF` neither fetches nor links libdatachannel. WebSocket-image builds do not
-need VIDEO or OpenH264. `RenderModuleWebRtc` is a private adapter DSO; installed
-RenderModule headers expose no libdatachannel types. See [licenses](third_party/WEBRTC_NOTICE.md).
+```cpp
+config.backend = Backend::Web;
+config.web.initialStream = WebStreamMode::H264;
+```
+
+`initialStream` only chooses the new browser's starting mode. With WebRTC available the
+same page also offers JPEG and PNG, and different sessions may use image and H.264 streams
+simultaneously. If H.264 capability initialization fails while an image stream is initial,
+H.264 is omitted from `availableStreams`; an explicitly configured initial H.264 stream
+fails startup instead of silently downgrading.
+
+H.264 encoding dimensions are normalized by `VideoCapture` (including the existing even
+size requirements) without imposing WebRTC-specific dimensions on the shared root viewport
+or JPEG/PNG sessions. Capture defaults to the Web stream cadence and runs only while at
+least one H.264 session exists. A recoverable negotiation/media failure tears down that
+session's peer, sends `stream_error`, and returns it to its last image stream while keeping
+the authenticated WebSocket alive.
+
+`RENDER_MODULE_ENABLE_WEBRTC=OFF` neither fetches nor links libdatachannel. JPEG/PNG Web
+builds do not need VIDEO or OpenH264. `RenderModuleWebRtc` remains a private adapter; public
+installed headers expose no libdatachannel types. See
+[third_party/WEBRTC_NOTICE.md](third_party/WEBRTC_NOTICE.md).
 
 ## Dependency and ICE policy
 
@@ -102,7 +114,8 @@ Native codec/profile and ICE/DTLS fields remain unchanged. Firefox drops unknown
 fmtp fields during local SDP serialization, so the declaration is attached on the
 signaling wire. The server requires Level >=4.0 or that explicit higher receive
 level; `level-asymmetry-allowed=1` alone is insufficient. An unavailable/negative
-capability query fails visibly; use explicit WebSocket image mode on older browsers.
+capability query fails visibly; the unified client requests its previous image stream on a
+recoverable H.264 failure.
 No SPS rewriting or fictitious decoder capability is used.
 
 The browser uses `<video autoplay playsinline muted>`, with a manual Play button
@@ -136,17 +149,18 @@ types when available. Missing browser fields are omitted, not synthesized.
   send + one pending AU. Overflow invalidates the reference chain; wait for/request
   a fresh IDR rather than replacing a dependent P frame and continuing blindly.
   Each sender has its own worker; no viewer blocks render/capture or other senders.
-- Signaling/session mutations and close are owned by the WebSocket thread. Hub
-  failures only mark sessions failed; they do not race signaling teardown. Callback
-  captures are weak; shutdown wakes/joins senders before closing peers. Failed
-  negotiation (15 seconds), disconnected ICE (3 seconds), or terminal errors close
-  the owning WebSocket and invoke the existing controller/input release-all path.
+- Signaling/session mutations and per-session media teardown are owned by the WebSocket
+  thread. Hub failures do not race signaling teardown. Callback captures are weak;
+  shutdown wakes/joins senders before closing peers. Recoverable H.264 setup/media
+  failures release held input, tear down only that peer and return the session to its
+  previous image stream; malformed protocol/security input can still close the WebSocket.
 - libnice media sockets are nonblocking; UDP/kernel buffers remain OS-managed.
   TURN/TCP still has transport head-of-line behavior; the application does not
   promise Internet latency bounds or manage a congestion controller.
 
-Authenticated `/api/version` adds `webrtc_sessions`, `webrtc_connected`, cumulative
-`webrtc_failed`, active-client RTP/NACK/retransmit/PLI/submitted/rejected totals,
+Authenticated `/api/version` reports `initial_stream`, `available_streams`, per-mode
+`stream_sessions`, plus `webrtc_sessions`, `webrtc_connected`, cumulative `webrtc_failed`,
+active-client RTP/NACK/retransmit/PLI/submitted/rejected totals,
 per-client SSRC/ICE/queue/REMB details, and a separate encoder metrics object.
 Traffic totals are **active-client snapshots**, so disconnects can lower totals.
 RTP bytes are measured before SRTP/IP/TURN overhead and represent send attempts,
