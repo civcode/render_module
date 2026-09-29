@@ -87,6 +87,9 @@ struct WebServer::Impl {
     struct PublishedImage { std::shared_ptr<const std::vector<unsigned char>> packet; std::uint64_t id=0; };
     PublishedImage latestJpeg, latestPng;
     std::atomic<unsigned> jpegSessions{0}, pngSessions{0}, h264Sessions{0};
+    std::string pngEncoder = "fpng";
+    bool pngFpngeCompiled = false;
+    bool pngFpngeCpuSupported = false;
     Impl(WebServer& owner_, WebConfig config_, std::shared_ptr<RemoteInputQueue> input_, std::shared_ptr<video::VideoPipeline> video_)
         : owner(owner_), config(std::move(config_)), input(std::move(input_)), video(std::move(video_)) {}
     void Accept();
@@ -157,6 +160,10 @@ struct WebServer::Impl {
             {"framesRendered",c.rendered.load()},{"image_frames_encoded",c.encoded.load()},{"image_frames_dropped",c.dropped.load()},
             {"image_bytes_encoded",c.encodedBytes.load()},{"jpegEncoded",jpegFrames},{"jpegDropped",c.jpegDropped.load()},
             {"pngEncoded",pngFrames},{"pngDropped",c.pngDropped.load()},
+            {"png_encoder",pngEncoder},{"png_fpnge_compiled",pngFpngeCompiled},
+            {"png_fpnge_cpu_supported",pngFpngeCpuSupported},
+            {"png_fpnge_frames",c.pngFpngeFrames.load()},{"png_fpng_frames",c.pngFpngFrames.load()},
+            {"png_fallback_frames",c.pngFallbackFrames.load()},
             {"jpeg_encode_ms",jpegFrames?double(c.jpegEncodeMicros.load())/jpegFrames/1000:0},
             {"png_encode_ms",pngFrames?double(c.pngEncodeMicros.load())/pngFrames/1000:0},
             {"bytesTransmitted",c.bytes.load()},{"inputAccepted",c.accepted.load()},{"inputRejected",c.rejected.load()},
@@ -719,6 +726,13 @@ bool WebServer::TakeViewport(WebSize& size) {
 }
 void WebServer::ObserveViewport(WebSize size) {
     std::lock_guard<std::mutex> lock(impl_->mailbox); impl_->actual = size;
+}
+void WebServer::SetPngEncoderInfo(std::string name, bool fpngeCompiled, bool fpngeCpuSupported) {
+    auto& s = *impl_;
+    if (s.thread.joinable()) return;
+    s.pngEncoder = std::move(name);
+    s.pngFpngeCompiled = fpngeCompiled;
+    s.pngFpngeCpuSupported = fpngeCpuSupported;
 }
 void WebServer::PublishImage(ImageCodec codec, std::shared_ptr<const std::vector<unsigned char>> packet, std::uint64_t id) {
     if (!packet || packet->size() > WebFrameLimit+28 || (codec!=ImageCodec::Jpeg && codec!=ImageCodec::Png)) return;

@@ -37,6 +37,8 @@ public:
         : pipeline_(MakeWebVideo(config)), server_(config.web, std::move(input), pipeline_),
           jpegEncoder_(ImageCodec::Jpeg,config.web.jpegQuality,WebFrameLimit),
           pngEncoder_(ImageCodec::Png,config.web.jpegQuality,WebFrameLimit), fps_(config.web.fps) {
+        server_.SetPngEncoderInfo(pngEncoder_.PngEncoderBackendName(),
+                                  PngFpngeCompiled(), PngFpngeCpuSupported());
 #ifdef RENDER_MODULE_ENABLE_WEBRTC
         if(pipeline_) capture_=std::make_unique<VideoCapture>(pipeline_);
 #endif
@@ -48,10 +50,12 @@ public:
             config.web.bindAddress : "[" + config.web.bindAddress + "]";
         std::fprintf(stderr,"RenderModule Web backend\n"
             "  Size            : %dx%d\n  HTTP            : http://%s:%u/\n  Auth            : %s\n"
-            "  Initial stream  : %s\n  Streams         : JPEG, PNG%s\n  JPEG quality    : %d\n",
+            "  Initial stream  : %s\n  Streams         : JPEG, PNG%s\n  JPEG quality    : %d\n"
+            "  PNG encoder     : %s\n",
             config.width,config.height,host.c_str(),server_.Port(),
             config.web.authToken.empty()?"disabled":"enabled", StreamName(config.web.initialStream),
-            server_.HasH264()?", H.264":"", config.web.jpegQuality);
+            server_.HasH264()?", H.264":"", config.web.jpegQuality,
+            pngEncoder_.PngEncoderBackendName());
         return true;
     }
     bool PrepareFrame() override {
@@ -102,6 +106,9 @@ private:
             ++server_.counters.jpegEncoded; server_.counters.jpegEncodedBytes+=payloadBytes; server_.counters.jpegEncodeMicros+=elapsed;
         } else {
             ++server_.counters.pngEncoded; server_.counters.pngEncodedBytes+=payloadBytes; server_.counters.pngEncodeMicros+=elapsed;
+            if(encoded.pngBackend==PngBackend::Fpnge) ++server_.counters.pngFpngeFrames;
+            else ++server_.counters.pngFpngFrames;
+            if(encoded.pngFellBack) ++server_.counters.pngFallbackFrames;
         }
         server_.PublishImage(encoder.Codec(),std::move(packet),frameId);
         return true;

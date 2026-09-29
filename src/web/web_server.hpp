@@ -3,6 +3,7 @@
 #include "input/remote_input_queue.hpp"
 #include <atomic>
 #include <memory>
+#include <string>
 
 namespace render_module::video { class VideoPipeline; }
 namespace render_module::detail {
@@ -13,6 +14,7 @@ struct WebCounters {
     std::atomic<std::uint64_t> accepted{0}, rejected{0}, full{0}, encodeMicros{0};
     std::atomic<std::uint64_t> jpegEncoded{0}, jpegDropped{0}, jpegEncodedBytes{0}, jpegEncodeMicros{0};
     std::atomic<std::uint64_t> pngEncoded{0}, pngDropped{0}, pngEncodedBytes{0}, pngEncodeMicros{0};
+    std::atomic<std::uint64_t> pngFpngeFrames{0}, pngFpngFrames{0}, pngFallbackFrames{0};
     std::atomic<std::uint64_t> streamSwitchRequests{0}, streamSwitches{0}, streamSwitchFailures{0};
 };
 struct WebStreamDemand {
@@ -34,6 +36,7 @@ public:
     bool HasH264() const;
     bool TakeViewport(WebSize& size);
     void ObserveViewport(WebSize size);
+    void SetPngEncoderInfo(std::string name, bool fpngeCompiled, bool fpngeCpuSupported);
     void PublishImage(ImageCodec codec, std::shared_ptr<const std::vector<unsigned char>> packet, std::uint64_t id);
     WebCounters counters;
 private:
