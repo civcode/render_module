@@ -14,8 +14,8 @@ The 3D layer is intentionally integrated into RenderModule instead of owning a s
 
 Requires CMake 3.16+, a C/C++17 toolchain, and OpenGL development files. GLFW is
 fetched at **3.5.1**; older system GLFW installations are not used. Corrade,
-Magnum, and NanoVG are pinned to tested commits. GLAD, ImGui, ImPlot, and fonts are
-also fetched, so the first configure requires network access.
+Magnum, NanoVG, FPNG, and FPNGE are pinned to tested commits. GLAD, ImGui, ImPlot,
+and fonts are also fetched, so the first configure requires network access.
 
 Linux Desktop builds additionally need X11/Wayland development packages (the
 corresponding GLFW build options select them). Headless builds need EGL
@@ -105,8 +105,8 @@ returns and before `Shutdown()`. It returns false if no completed frame exists,
 readback fails, or writing fails. This is synchronous RGBA8 readback, with a
 256 MiB capture limit and no per-frame readback when capture is not requested.
 PNG images are top-origin; the sole output flip occurs immediately after GL
-readback. The small public-domain writer is reused from the existing NanoVG
-source tree; see [third_party/PNG_NOTICE.md](third_party/PNG_NOTICE.md).
+readback. PNG encoding uses the same runtime-selected FPNGE/FPNG path as the Web
+backend; see [third_party/PNG_NOTICE.md](third_party/PNG_NOTICE.md).
 
 Headless mode uses a private, browser-independent `RemoteInputBackend`, with a
 256-slot thread-safe typed event queue. It feeds ImGui's Add*Event APIs for mouse,
@@ -162,9 +162,19 @@ connected browser starts with. Users can switch modes on the page without reconn
 WebSocket or losing their session/controller lease.
 
 Defaults: initial JPEG, 20 stream fps, JPEG quality 80, max 1920×1080, eight clients and a
-FirstConnected controller with automatic promotion. PNG has no quality setting and may not
-sustain 20 fps at 1080p. The presenter is demand-driven: JPEG and PNG viewers share one
-RGBA readback; H.264 capture runs only while an H.264 session exists.
+FirstConnected controller with automatic promotion. PNG has no quality setting. On supported
+Linux x86-64 GCC/Clang builds, PNG automatically uses an isolated FPNGE AVX2/PCLMUL fast
+path; FPNG is the conservative fallback on unsupported CPUs/platforms and is also used as a
+one-shot rescue encoder when an FPNGE frame fails or exceeds the Web frame limit. The
+presenter is demand-driven: JPEG and PNG viewers share one RGBA readback; H.264 capture
+runs only while an H.264 session exists.
+
+For diagnostics, benchmarking, or field rollback, set
+`RENDER_MODULE_PNG_ENCODER=auto|fpnge|fpng`. FPNGE compression levels 1–5 can be selected
+with `RENDER_MODULE_FPNGE_LEVEL` (default 4). Configure
+`-DRENDER_MODULE_ENABLE_FPNGE=OFF` to build FPNG only. The authenticated
+`/api/version` payload reports the selected backend, CPU/build availability, per-backend
+frame counts, and successful rescue fallbacks.
 
 The embedded vanilla JS client supports Pointer Events/capture, physical keys, committed
 Unicode/IME/paste, normalized wheel input, debounced viewport requests, runtime stream
@@ -249,7 +259,9 @@ ctest --test-dir build --output-on-failure
 
 Native C++ regressions use Catch2 v3 while CTest remains the top-level runner
 that supplies process isolation, feature-specific environments, labels, and
-timeouts. Run one public test with `ctest --test-dir build -R '^input_queue$'`,
+timeouts. PNG backend hardening can additionally be built with
+`-DRENDER_MODULE_PNG_SANITIZERS=ON`, which instruments the PNG-related RenderModule
+objects with AddressSanitizer and UndefinedBehaviorSanitizer on GCC/Clang. Run one public test with `ctest --test-dir build -R '^input_queue$'`,
 or invoke a test binary directly with a Catch2 tag, for example
 `RenderModuleInputTests "[input][queue]"`. The dedicated
 `RenderModuleInputProtocolVectors` utility emits cross-language protocol vectors;
