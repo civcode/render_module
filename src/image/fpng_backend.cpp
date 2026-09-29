@@ -8,18 +8,22 @@
 
 namespace render_module::detail {
 
-bool EncodeFpng(const ImageRgba& image,
+bool EncodeFpng(const unsigned char* rgba,
+                int width,
+                int height,
                 std::vector<unsigned char>& output,
                 std::size_t limit) {
+    if (!rgba || width <= 0 || height <= 0 || !limit) return false;
+
     static std::once_flag init;
     std::call_once(init, [] { fpng::fpng_init(); });
 
     std::vector<unsigned char> next;
     try {
         if (!fpng::fpng_encode_image_to_memory(
-                image.pixels.data(),
-                static_cast<std::uint32_t>(image.width),
-                static_cast<std::uint32_t>(image.height),
+                rgba,
+                static_cast<std::uint32_t>(width),
+                static_cast<std::uint32_t>(height),
                 4,
                 next,
                 0)) {

@@ -122,11 +122,12 @@ PngEncodeResult PngEncoder::Encode(const ImageRgba& image,
 
 #ifdef RENDER_MODULE_HAVE_FPNGE
     if (backend_ == PngBackend::Fpnge) {
-        if (EncodeFpnge(image, fpngeLevel_, fpngeScratch_, output, limit))
+        if (EncodeFpnge(image.pixels.data(), image.width, image.height,
+                        fpngeLevel_, fpngeScratch_, output, limit))
             return {true, PngBackend::Fpnge, false};
 
         std::vector<unsigned char> fallback;
-        if (EncodeFpng(image, fallback, limit)) {
+        if (EncodeFpng(image.pixels.data(), image.width, image.height, fallback, limit)) {
             output = std::move(fallback);
             return {true, PngBackend::Fpng, true};
         }
@@ -134,7 +135,7 @@ PngEncodeResult PngEncoder::Encode(const ImageRgba& image,
     }
 #endif
 
-    if (!EncodeFpng(image, output, limit)) return {};
+    if (!EncodeFpng(image.pixels.data(), image.width, image.height, output, limit)) return {};
     return {true, PngBackend::Fpng, false};
 }
 

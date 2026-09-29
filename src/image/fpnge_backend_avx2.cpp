@@ -15,11 +15,11 @@ constexpr std::array<unsigned char, 8> PngSignature{
     0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a
 };
 
-bool OutputCapacity(const ImageRgba& image, std::size_t& capacity) noexcept {
-    if (image.width <= 0 || image.height <= 0) return false;
+bool OutputCapacity(int imageWidth, int imageHeight, std::size_t& capacity) noexcept {
+    if (imageWidth <= 0 || imageHeight <= 0) return false;
     const auto max = std::numeric_limits<std::size_t>::max();
-    const auto width = static_cast<std::size_t>(image.width);
-    const auto height = static_cast<std::size_t>(image.height);
+    const auto width = static_cast<std::size_t>(imageWidth);
+    const auto height = static_cast<std::size_t>(imageHeight);
     if (width > max / 4) return false;
     const auto row = width * 4;
     if (row > (max - 1) / 2) return false;
@@ -31,13 +31,15 @@ bool OutputCapacity(const ImageRgba& image, std::size_t& capacity) noexcept {
 
 } // namespace
 
-bool EncodeFpnge(const ImageRgba& image,
+bool EncodeFpnge(const unsigned char* rgba,
+                 int width,
+                 int height,
                  int level,
                  std::vector<unsigned char>& scratch,
                  std::vector<unsigned char>& output,
                  std::size_t limit) {
     std::size_t capacity = 0;
-    if (!limit || !OutputCapacity(image, capacity)) return false;
+    if (!rgba || !limit || !OutputCapacity(width, height, capacity)) return false;
 
     // FPNGE's API accepts an output pointer but no capacity. Keep permanent
     // headroom beyond its documented conservative bound; debug builds also
@@ -69,10 +71,10 @@ bool EncodeFpnge(const ImageRgba& image,
         size = FPNGEEncode(
             1,
             4,
-            image.pixels.data(),
-            static_cast<std::size_t>(image.width),
-            static_cast<std::size_t>(image.width) * 4,
-            static_cast<std::size_t>(image.height),
+            rgba,
+            static_cast<std::size_t>(width),
+            static_cast<std::size_t>(width) * 4,
+            static_cast<std::size_t>(height),
             scratch.data(),
             &options);
     } catch (const std::bad_alloc&) {

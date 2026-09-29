@@ -1,12 +1,13 @@
 #pragma once
 
-#include "present/image_presenter.hpp"
 #include <cstddef>
 #include <vector>
 
 namespace render_module::detail {
 
-bool EncodeFpng(const ImageRgba& image,
+bool EncodeFpng(const unsigned char* rgba,
+                int width,
+                int height,
                 std::vector<unsigned char>& output,
                 std::size_t limit);
 
