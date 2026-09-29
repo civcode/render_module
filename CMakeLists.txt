@@ -205,6 +205,8 @@ if(RENDER_MODULE_ENABLE_FPNGE
     target_compile_features(RenderModuleFpngeAvx2 PRIVATE cxx_std_17)
     target_include_directories(RenderModuleFpngeAvx2 PRIVATE "${fpnge_source_SOURCE_DIR}")
     target_compile_options(RenderModuleFpngeAvx2 PRIVATE -mavx2 -mpclmul)
+    target_sources(RenderModuleFpngeAvx2 PRIVATE src/image/fpnge_backend_avx2.cpp)
+    target_include_directories(RenderModuleFpngeAvx2 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     set(RENDER_MODULE_HAVE_FPNGE ON)
     message(STATUS "RenderModule PNG: FPNGE AVX2 acceleration enabled")
 elseif(RENDER_MODULE_ENABLE_FPNGE)
@@ -239,6 +241,10 @@ file(COPY ${ROBOTO_TTF_FILES} DESTINATION "${RENDER_MODULE_BUILD_FONT_DIR}")
 
 add_library(RenderModule SHARED)
 add_library(RenderModule::RenderModule ALIAS RenderModule)
+if(RENDER_MODULE_HAVE_FPNGE)
+    target_sources(RenderModule PRIVATE $<TARGET_OBJECTS:RenderModuleFpngeAvx2>)
+    target_compile_definitions(RenderModule PRIVATE RENDER_MODULE_HAVE_FPNGE=1)
+endif()
 
 target_sources(RenderModule PRIVATE
     src/canvas.cpp
@@ -249,7 +255,10 @@ target_sources(RenderModule PRIVATE
     src/core/root_framebuffer.cpp
     src/input/remote_input_queue.cpp
     src/input/remote_input_backend.cpp
+    src/image/png_encoder.cpp
+    src/image/fpng_backend.cpp
     src/present/image_presenter.cpp
+    $<TARGET_OBJECTS:RenderModuleFpng>
     src/platform/platform_backend.cpp
     src/view3d.cpp
     src/zoom_view.cpp
@@ -331,7 +340,8 @@ target_include_directories(RenderModule
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${nanovg_SOURCE_DIR}/example # stb_image_write.h, private diagnostic PNG writer.
+        ${fpng_source_SOURCE_DIR}/src
+        ${nanovg_SOURCE_DIR}/example # stb_image.h remains the independent test decoder.
 )
 target_link_libraries(RenderModule PRIVATE
     ${RENDER_MODULE_GLFW_TARGET}

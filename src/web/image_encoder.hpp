@@ -1,5 +1,6 @@
 #pragma once
 #include "present/image_presenter.hpp"
+#include "image/png_encoder.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -11,17 +12,22 @@ struct EncodedImage {
     std::uint64_t frameId=0;
     std::uint32_t width=0,height=0;
     std::vector<unsigned char> bytes;
+    PngBackend pngBackend=PngBackend::Fpng;
+    bool pngFellBack=false;
 };
 class ImageEncoder {
 public:
     ImageEncoder(ImageCodec codec,int jpegQuality,std::size_t limit)
-        :codec_(codec),jpegQuality_(jpegQuality),limit_(limit) {}
+        :codec_(codec),jpegQuality_(jpegQuality),limit_(limit),
+         pngEncoder_(codec==ImageCodec::Png?PngBackend::Auto:PngBackend::Fpng) {}
     bool Encode(const ImageRgba&,std::uint64_t frameId,EncodedImage&) const;
     ImageCodec Codec() const;
+    const char* PngEncoderBackendName() const noexcept { return pngEncoder_.BackendName(); }
 private:
     ImageCodec codec_;
     int jpegQuality_;
     std::size_t limit_;
+    mutable PngEncoder pngEncoder_;
 };
 const char* ImageCodecName(ImageCodec) noexcept;
 const char* ImageCodecMime(ImageCodec) noexcept;

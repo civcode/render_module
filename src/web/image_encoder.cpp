@@ -20,7 +20,10 @@ bool ImageEncoder::Encode(const ImageRgba& image,std::uint64_t frameId,EncodedIm
     EncodedImage next; next.codec=Codec(); next.frameId=frameId;
     next.width=std::uint32_t(image.width); next.height=std::uint32_t(image.height);
     if(next.codec==ImageCodec::Png) {
-        if(!ImagePresenter::EncodePng(image,next.bytes,limit_)) return false;
+        const auto result=pngEncoder_.Encode(image,next.bytes,limit_);
+        if(!result.ok) return false;
+        next.pngBackend=result.backend;
+        next.pngFellBack=result.fellBack;
     } else {
         unsigned char* bytes=nullptr; unsigned long size=0;
         if(!rm_encode_jpeg(image.pixels.data(),image.width,image.height,jpegQuality_,

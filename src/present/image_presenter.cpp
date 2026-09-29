@@ -1,20 +1,15 @@
 #include "image_presenter.hpp"
+#include "image/png_encoder.hpp"
 
 #include <algorithm>
 #include <cstdio>
-#include <cstdlib>
 #include <limits>
 #include <new>
-
-// Reuse the public-domain PNG writer already shipped with pinned NanoVG.
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include <stb_image_write.h>
 
 namespace render_module::detail {
 namespace {
 bool ImageSize(int width, int height, std::size_t& bytes) {
-    // Diagnostic captures are bounded at 256 MiB. This also keeps the writer's
-    // internal signed-int stride/compression calculations safely in range.
+    // Diagnostic captures are bounded at 256 MiB and use checked RGBA8 sizing.
     if (width <= 0 || height <= 0 || width > 65536 || height > 65536) return false;
     const std::uint64_t size = std::uint64_t(width) * height * 4;
     if (size > 256u * 1024u * 1024u) return false;
@@ -82,18 +77,8 @@ bool ImagePresenter::ReadInto(const PresentedFrame& frame, unsigned char* data, 
 
 bool ImagePresenter::EncodePng(const ImageRgba& image, std::vector<unsigned char>& output,
                                std::size_t limit) {
-    std::size_t bytes = 0;
-    if (!ImageSize(image.width,image.height,bytes) || image.pixels.size()!=bytes || !limit) return false;
-    int length = 0;
-    unsigned char* png = stbi_write_png_to_mem(const_cast<unsigned char*>(image.pixels.data()),
-        image.width*4,image.width,image.height,4,&length);
-    if (!png || length<=0 || static_cast<std::size_t>(length)>limit) {
-        std::free(png); return false;
-    }
-    std::vector<unsigned char> next;
-    try { next.assign(png,png+length); }
-    catch(const std::bad_alloc&) { std::free(png); return false; }
-    std::free(png);output=std::move(next);return true;
+    PngEncoder encoder;
+    return encoder.Encode(image, output, limit).ok;
 }
 
 bool ImagePresenter::WritePng(const std::string& path, const ImageRgba& image) {
