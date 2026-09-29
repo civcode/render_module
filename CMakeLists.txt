@@ -152,7 +152,7 @@ FetchContent_MakeAvailable(implot)
 FetchContent_Declare(
     nanovg
     GIT_REPOSITORY https://github.com/memononen/nanovg.git
-    GIT_TAG ce3bf745eb2d2dbc14a50bf2446783f691ac4353 # Includes public-domain PNG writer.
+    GIT_TAG ce3bf745eb2d2dbc14a50bf2446783f691ac4353 # Also supplies stb_image.h for independent PNG tests.
 )
 FetchContent_MakeAvailable(nanovg)
 
@@ -205,7 +205,7 @@ if(RENDER_MODULE_ENABLE_FPNGE
         INTERPROCEDURAL_OPTIMIZATION OFF)
     target_compile_features(RenderModuleFpngeAvx2 PRIVATE cxx_std_17)
     target_include_directories(RenderModuleFpngeAvx2 PRIVATE "${fpnge_source_SOURCE_DIR}")
-    target_compile_options(RenderModuleFpngeAvx2 PRIVATE -mavx2 -mpclmul)
+    target_compile_options(RenderModuleFpngeAvx2 PRIVATE -mavx2 -mpclmul -fno-lto)
     target_sources(RenderModuleFpngeAvx2 PRIVATE src/image/fpnge_backend_avx2.cpp)
     target_include_directories(RenderModuleFpngeAvx2 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     set(RENDER_MODULE_HAVE_FPNGE ON)
@@ -354,7 +354,6 @@ target_include_directories(RenderModule
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${fpng_source_SOURCE_DIR}/src
-        ${nanovg_SOURCE_DIR}/example # stb_image.h remains the independent test decoder.
 )
 target_link_libraries(RenderModule PRIVATE
     ${RENDER_MODULE_GLFW_TARGET}

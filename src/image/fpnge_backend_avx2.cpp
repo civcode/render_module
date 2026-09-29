@@ -39,13 +39,17 @@ bool EncodeFpnge(const ImageRgba& image,
     std::size_t capacity = 0;
     if (!limit || !OutputCapacity(image, capacity)) return false;
 
+    // FPNGE's API accepts an output pointer but no capacity. Keep permanent
+    // headroom beyond its documented conservative bound; debug builds also
+    // verify that this headroom remains untouched.
+    constexpr std::size_t StoragePadding = 128;
 #ifndef NDEBUG
-    constexpr std::size_t RedZone = 128;
+    constexpr std::size_t RedZone = StoragePadding;
 #else
     constexpr std::size_t RedZone = 0;
 #endif
-    if (capacity > std::numeric_limits<std::size_t>::max() - RedZone) return false;
-    const auto required = capacity + RedZone;
+    if (capacity > std::numeric_limits<std::size_t>::max() - StoragePadding) return false;
+    const auto required = capacity + StoragePadding;
 
     try {
         if (scratch.size() < required) scratch.resize(required);
@@ -60,15 +64,20 @@ bool EncodeFpnge(const ImageRgba& image,
 
     FPNGEOptions options;
     FPNGEFillOptions(&options, level, FPNGE_CICP_NONE);
-    const auto size = FPNGEEncode(
-        1,
-        4,
-        image.pixels.data(),
-        static_cast<std::size_t>(image.width),
-        static_cast<std::size_t>(image.width) * 4,
-        static_cast<std::size_t>(image.height),
-        scratch.data(),
-        &options);
+    std::size_t size = 0;
+    try {
+        size = FPNGEEncode(
+            1,
+            4,
+            image.pixels.data(),
+            static_cast<std::size_t>(image.width),
+            static_cast<std::size_t>(image.width) * 4,
+            static_cast<std::size_t>(image.height),
+            scratch.data(),
+            &options);
+    } catch (const std::bad_alloc&) {
+        return false;
+    }
 
 #ifndef NDEBUG
     if (!std::all_of(scratch.begin() + static_cast<std::ptrdiff_t>(capacity),
