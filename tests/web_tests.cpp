@@ -15,6 +15,7 @@
 #include <boost/beast.hpp>
 #include <boost/json.hpp>
 #include <stb_image.h>
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <cstdlib>
@@ -200,13 +201,17 @@ void ServerTests() {
     server.Stop();REQUIRE((server.counters.sessions==0));
     REQUIRE((std::chrono::steady_clock::now()-stopStart<std::chrono::seconds(2)));
     auto pngConfig=config;pngConfig.initialStream=render_module::WebStreamMode::Png;
-    WebServer pngServer(pngConfig,queue);REQUIRE((pngServer.Start()));Client pngClient;REQUIRE((pngClient.Connect(pngServer.Port())));
+    WebServer pngServer(pngConfig,queue);
+    pngServer.SetPngEncoderInfo("fpnge-avx2",true,true);
+    REQUIRE((pngServer.Start()));Client pngClient;REQUIRE((pngClient.Connect(pngServer.Port())));
     const auto pngWelcome=pngClient.Until("welcome");REQUIRE((pngWelcome.at("stream")=="png"));
     EncodedImage png;png.codec=ImageCodec::Png;png.frameId=1;png.width=32;png.height=24;
     png.bytes={0x89,'P','N','G',0x0d,0x0a,0x1a,0x0a};
     pngServer.PublishImage(ImageCodec::Png,std::make_shared<const std::vector<unsigned char>>(PackImage(png)),1);REQUIRE((pngClient.Frame()==1));
     const auto pngMetrics=boost::json::parse(Get(pngServer.Port(),"/api/version",true).body()).as_object();
     REQUIRE((pngMetrics.at("initial_stream")=="png"));
+    REQUIRE((pngMetrics.at("png_encoder")=="fpnge-avx2" && pngMetrics.at("png_fpnge_compiled").as_bool()));
+    REQUIRE((pngMetrics.at("png_fpnge_cpu_supported").as_bool()));
     REQUIRE((pngMetrics.at("stream_sessions").as_object().at("png").as_uint64()==1));
     pngClient.Close();pngServer.Stop();
 }
@@ -292,53 +297,130 @@ void ProtocolTests() {
     encoded.frameId=1;encoded.bytes.resize(WebFrameLimit+1);REQUIRE((PackImage(encoded).empty()));
 }
 void PngTests() {
-    ImageRgba pattern; pattern.width=67;pattern.height=53;pattern.pixels.resize(std::size_t(pattern.width)*pattern.height*4);
-    for(int y=0;y<pattern.height;++y) for(int x=0;x<pattern.width;++x) {
-        auto* p=&pattern.pixels[(std::size_t(y)*pattern.width+x)*4];
-        p[0]=static_cast<unsigned char>((x*255)/(pattern.width-1));
-        p[1]=static_cast<unsigned char>((y*255)/(pattern.height-1));
-        p[2]=static_cast<unsigned char>(((x^y)&1)?255:0);
-        p[3]=static_cast<unsigned char>((x+y)%5?255:(x*3+y*5)&255);
-        if(x<8&&y<8) { const unsigned char colors[][4]={{0,0,0,0},{255,255,255,255},{255,0,0,128},{0,255,0,64},{0,0,255,255}};
-            std::memcpy(p,colors[(x+y)%5],4); }
+    auto decodeMatches=[](const std::vector<unsigned char>& png,const ImageRgba& source) {
+        int w=0,h=0,channels=0;
+        auto* decoded=stbi_load_from_memory(png.data(),int(png.size()),&w,&h,&channels,4);
+        REQUIRE((decoded && w==source.width && h==source.height &&
+                 std::memcmp(decoded,source.pixels.data(),source.pixels.size())==0));
+        stbi_image_free(decoded);
+    };
+    auto chunkNames=[](const std::vector<unsigned char>& png) {
+        std::size_t offset=8;std::vector<std::string> chunks;
+        while(offset+12<=png.size()) {
+            const auto length=(std::uint32_t(png[offset])<<24)|(std::uint32_t(png[offset+1])<<16)|
+                (std::uint32_t(png[offset+2])<<8)|png[offset+3];
+            REQUIRE((offset+12+length<=png.size()));
+            chunks.emplace_back(reinterpret_cast<const char*>(png.data()+offset+4),4);
+            offset+=12+length;
+        }
+        REQUIRE((offset==png.size()));
+        return chunks;
+    };
+    auto fill=[](ImageRgba& image,std::uint32_t seed) {
+        image.pixels.resize(std::size_t(image.width)*image.height*4);
+        auto random=seed;
+        for(int y=0;y<image.height;++y) for(int x=0;x<image.width;++x) {
+            auto* p=&image.pixels[(std::size_t(y)*image.width+x)*4];
+            random=random*1664525u+1013904223u;p[0]=static_cast<unsigned char>(random>>24);
+            random=random*1664525u+1013904223u;p[1]=static_cast<unsigned char>(random>>24);
+            p[2]=static_cast<unsigned char>(((x^y)&1)?255:0);
+            constexpr unsigned char alpha[]={0,1,64,128,254,255};
+            p[3]=alpha[(x+y)%6];
+        }
+    };
+
+    ImageRgba pattern;pattern.width=67;pattern.height=53;fill(pattern,1);
+    for(int y=0;y<8;++y) for(int x=0;x<8;++x) {
+        const unsigned char colors[][4]={{0,0,0,0},{255,255,255,255},{255,0,0,128},
+            {0,255,0,64},{0,0,255,255},{1,2,3,1},{254,253,252,254}};
+        std::memcpy(&pattern.pixels[(std::size_t(y)*pattern.width+x)*4],colors[(x+y)%7],4);
     }
+
+    const bool accelerated=PngFpngeCompiled()&&PngFpngeCpuSupported();
+    PngEncoder safe(PngBackend::Fpng);
+    REQUIRE((safe.Backend()==PngBackend::Fpng && std::string(safe.BackendName())=="fpng"));
+    std::vector<unsigned char> safeBytes;
+    auto safeResult=safe.Encode(pattern,safeBytes,WebFrameLimit);
+    REQUIRE((safeResult.ok && safeResult.backend==PngBackend::Fpng && !safeResult.fellBack));
+    decodeMatches(safeBytes,pattern);
+    const auto safeChunks=chunkNames(safeBytes);
+    REQUIRE((!safeChunks.empty() && safeChunks.front()=="IHDR" && safeChunks.back()=="IEND"));
+    REQUIRE((std::find(safeChunks.begin(),safeChunks.end(),"IDAT")!=safeChunks.end()));
+    REQUIRE((std::find(safeChunks.begin(),safeChunks.end(),"fdEC")!=safeChunks.end()));
+
+    PngEncoder requestedFast(PngBackend::Fpnge);
+    REQUIRE((requestedFast.Backend()==(accelerated?PngBackend::Fpnge:PngBackend::Fpng)));
+    std::vector<unsigned char> fastBytes;
+    const auto fastResult=requestedFast.Encode(pattern,fastBytes,WebFrameLimit);
+    REQUIRE((fastResult.ok));
+    if(accelerated) REQUIRE((fastResult.backend==PngBackend::Fpnge && !fastResult.fellBack));
+    decodeMatches(fastBytes,pattern);
+
+    {
+        const char* previous=std::getenv("RENDER_MODULE_PNG_ENCODER");
+        const std::optional<std::string> saved=previous?std::optional<std::string>(previous):std::nullopt;
+        struct Restore {
+            std::optional<std::string> value;
+            ~Restore(){if(value) ::setenv("RENDER_MODULE_PNG_ENCODER",value->c_str(),1);else ::unsetenv("RENDER_MODULE_PNG_ENCODER");}
+        } restore{saved};
+        ::setenv("RENDER_MODULE_PNG_ENCODER","fpng",1);
+        PngEncoder forced;REQUIRE((forced.Backend()==PngBackend::Fpng));
+        ::setenv("RENDER_MODULE_PNG_ENCODER","fpnge",1);
+        PngEncoder forcedFast;REQUIRE((forcedFast.Backend()==(accelerated?PngBackend::Fpnge:PngBackend::Fpng)));
+        ::setenv("RENDER_MODULE_PNG_ENCODER","invalid-test-value",1);
+        PngEncoder invalidOverride;REQUIRE((invalidOverride.Backend()==(accelerated?PngBackend::Fpnge:PngBackend::Fpng)));
+    }
+
+    const std::pair<int,int> dimensions[]={{1,1},{1,2},{2,1},{2,2},{3,5},{7,13},{15,17},
+        {16,16},{17,15},{31,33},{63,65},{67,53},{127,129},{320,200}};
+    PngEncoder propertySafe(PngBackend::Fpng);
+    PngEncoder propertyFast(PngBackend::Fpnge);
+    std::uint32_t seed=7;
+    for(const auto [width,height]:dimensions) {
+        ImageRgba image;image.width=width;image.height=height;fill(image,seed++);
+        std::vector<unsigned char> png;
+        auto result=propertySafe.Encode(image,png,WebFrameLimit);
+        REQUIRE((result.ok && result.backend==PngBackend::Fpng));decodeMatches(png,image);
+        if(accelerated) {
+            png.clear();result=propertyFast.Encode(image,png,WebFrameLimit);
+            REQUIRE((result.ok && result.backend==PngBackend::Fpnge));decodeMatches(png,image);
+        }
+    }
+
     ImageEncoder encoder(ImageCodec::Png,80,WebFrameLimit);EncodedImage encoded;
     for(std::uint64_t id=1;id<=20;++id) {
-        REQUIRE((encoder.Encode(pattern,id,encoded)));REQUIRE((encoded.codec==ImageCodec::Png && encoded.frameId==id));
+        REQUIRE((encoder.Encode(pattern,id,encoded)));
+        REQUIRE((encoded.codec==ImageCodec::Png && encoded.frameId==id));
         const unsigned char signature[]={0x89,'P','N','G',0x0d,0x0a,0x1a,0x0a};
         REQUIRE((encoded.bytes.size()>32 && std::memcmp(encoded.bytes.data(),signature,8)==0));
-        int w=0,h=0,channels=0;auto* decoded=stbi_load_from_memory(encoded.bytes.data(),int(encoded.bytes.size()),&w,&h,&channels,4);
-        REQUIRE((decoded && w==pattern.width && h==pattern.height &&
-              std::memcmp(decoded,pattern.pixels.data(),pattern.pixels.size())==0));
-        stbi_image_free(decoded);
+        decodeMatches(encoded.bytes,pattern);
     }
-    // stb emits only signature/IHDR/IDAT/IEND: no profile/gamma chunks that can transform samples.
-    std::size_t offset=8;std::vector<std::string> chunks;
-    while(offset+12<=encoded.bytes.size()) {
-        const auto length=(std::uint32_t(encoded.bytes[offset])<<24)|(std::uint32_t(encoded.bytes[offset+1])<<16)|
-            (std::uint32_t(encoded.bytes[offset+2])<<8)|encoded.bytes[offset+3];
-        REQUIRE((offset+12+length<=encoded.bytes.size()));chunks.emplace_back(reinterpret_cast<const char*>(encoded.bytes.data()+offset+4),4);
-        offset+=12+length;
-    }
-    REQUIRE((chunks.size()==3 && chunks[0]=="IHDR" && chunks[1]=="IDAT" && chunks[2]=="IEND"));
-    ImageRgba invalid;std::vector<unsigned char> bytes{1};REQUIRE((!ImagePresenter::EncodePng(invalid,bytes)));
+    const auto chunks=chunkNames(encoded.bytes);
+    REQUIRE((!chunks.empty() && chunks.front()=="IHDR" && chunks.back()=="IEND"));
+    REQUIRE((std::find(chunks.begin(),chunks.end(),"IDAT")!=chunks.end()));
+    for(const auto* transformed:{"gAMA","cHRM","iCCP","sRGB"})
+        REQUIRE((std::find(chunks.begin(),chunks.end(),transformed)==chunks.end()));
+
+    ImageRgba invalid;std::vector<unsigned char> bytes{1};
+    REQUIRE((!ImagePresenter::EncodePng(invalid,bytes) && bytes==std::vector<unsigned char>{1}));
     ImageEncoder tiny(ImageCodec::Png,80,8);REQUIRE((!tiny.Encode(pattern,1,encoded)));
+
     ImageRgba noise;noise.width=1920;noise.height=1080;noise.pixels.resize(std::size_t(noise.width)*noise.height*4);
     std::uint32_t random=1;for(auto& byte:noise.pixels){random=random*1664525u+1013904223u;byte=static_cast<unsigned char>(random>>24);}
     REQUIRE((encoder.Encode(noise,22,encoded) && encoded.bytes.size()<WebFrameLimit));
     noise.width=noise.height=2048;noise.pixels.resize(std::size_t(noise.width)*noise.height*4);
     for(auto& byte:noise.pixels){random=random*1664525u+1013904223u;byte=static_cast<unsigned char>(random>>24);}
     REQUIRE((!encoder.Encode(noise,23,encoded)));
+
     // Actual root readback uses the same sole flip as screenshots and must round-trip exactly.
     render_module::Config config;config.backend=render_module::Backend::Headless;config.headlessContext=render_module::HeadlessContext::NativeEgl;
     config.width=128;config.height=96;REQUIRE((RenderModule::Init(config)));RootFramebuffer root;REQUIRE((root.Resize(64,48)));root.BeginFrame();
     glDisable(GL_SCISSOR_TEST);glClearColor(0,0,1,.25f);glClear(GL_COLOR_BUFFER_BIT);
     glEnable(GL_SCISSOR_TEST);glScissor(0,24,64,24);glClearColor(1,0,0,1);glClear(GL_COLOR_BUFFER_BIT);glDisable(GL_SCISSOR_TEST);
     const auto now=std::chrono::steady_clock::now();const auto frame=root.Complete(1,now,now);ImageRgba actual;REQUIRE((ImagePresenter::Read(frame,actual)));
-    REQUIRE((encoder.Encode(actual,21,encoded)));int w=0,h=0,channels=0;
-    auto* decoded=stbi_load_from_memory(encoded.bytes.data(),int(encoded.bytes.size()),&w,&h,&channels,4);
-    REQUIRE((decoded && w==64 && h==48 && std::memcmp(decoded,actual.pixels.data(),actual.pixels.size())==0));
-    REQUIRE((decoded[(5*64+32)*4]==255 && decoded[(42*64+32)*4+2]==255));stbi_image_free(decoded);
+    REQUIRE((encoder.Encode(actual,21,encoded)));decodeMatches(encoded.bytes,actual);
+    int w=0,h=0,channels=0;auto* decoded=stbi_load_from_memory(encoded.bytes.data(),int(encoded.bytes.size()),&w,&h,&channels,4);
+    REQUIRE((decoded && decoded[(5*64+32)*4]==255 && decoded[(42*64+32)*4+2]==255));stbi_image_free(decoded);
     root.Destroy();RenderModule::Shutdown();
 }
 void JpegTests() {

@@ -1,6 +1,7 @@
 #include "fpng_backend.hpp"
 
 #include <fpng.h>
+#include <cstdint>
 #include <mutex>
 #include <new>
 #include <utility>
