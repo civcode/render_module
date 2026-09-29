@@ -13,6 +13,7 @@ option(RENDER_MODULE_ENABLE_WEB "Build unified Web frontend (JPEG/PNG WebSocket 
 option(RENDER_MODULE_ENABLE_VIDEO "Build transport-independent CPU video pipeline" OFF)
 option(RENDER_MODULE_ENABLE_WEBRTC "Build WebRTC H.264/DataChannel transport (libnice/OpenSSL)" OFF)
 option(RENDER_MODULE_ENABLE_OPENH264 "Use OpenH264 when video is enabled" ON)
+option(RENDER_MODULE_ENABLE_FPNGE "Build AVX2 FPNGE PNG acceleration when supported" ON)
 option(RENDER_MODULE_VIDEO_ASAN "Instrument video library/dependencies/tests with ASan" OFF)
 option(RENDER_MODULE_BUILD_BROWSER_TESTS "Run installed Playwright Chromium tests" OFF)
 option(RENDER_MODULE_BUILD_FIREFOX_TESTS "Run installed Playwright Firefox WebRTC test" OFF)
@@ -153,6 +154,62 @@ FetchContent_Declare(
     GIT_TAG ce3bf745eb2d2dbc14a50bf2446783f691ac4353 # Includes public-domain PNG writer.
 )
 FetchContent_MakeAvailable(nanovg)
+
+# PNG encoding dependencies are populated as source only. Their upstream CMake
+# projects are intentionally not imported because they set global compiler
+# flags and build standalone tools that RenderModule does not need.
+FetchContent_Declare(
+    fpng_source
+    GIT_REPOSITORY https://github.com/richgel999/fpng.git
+    GIT_TAG 925796543b9d26b8edfcdcecd94c1dac280f29fc
+    GIT_SHALLOW FALSE
+)
+FetchContent_GetProperties(fpng_source)
+if(NOT fpng_source_POPULATED)
+    FetchContent_Populate(fpng_source)
+endif()
+add_library(RenderModuleFpng OBJECT
+    "${fpng_source_SOURCE_DIR}/src/fpng.cpp")
+set_target_properties(RenderModuleFpng PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(RenderModuleFpng PRIVATE cxx_std_17)
+target_include_directories(RenderModuleFpng PRIVATE "${fpng_source_SOURCE_DIR}/src")
+target_compile_definitions(RenderModuleFpng PRIVATE
+    FPNG_NO_SSE=1
+    FPNG_NO_STDIO=1
+    FPNG_USE_UNALIGNED_LOADS=0)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(RenderModuleFpng PRIVATE -fno-strict-aliasing)
+endif()
+message(STATUS "RenderModule PNG: FPNG fallback enabled")
+
+set(RENDER_MODULE_HAVE_FPNGE OFF)
+if(RENDER_MODULE_ENABLE_FPNGE
+   AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64"
+   AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    FetchContent_Declare(
+        fpnge_source
+        GIT_REPOSITORY https://github.com/veluca93/fpnge.git
+        GIT_TAG 097ebccf3d3db443d9a8f238b1deed010a82f961
+        GIT_SHALLOW FALSE
+    )
+    FetchContent_GetProperties(fpnge_source)
+    if(NOT fpnge_source_POPULATED)
+        FetchContent_Populate(fpnge_source)
+    endif()
+    add_library(RenderModuleFpngeAvx2 OBJECT
+        "${fpnge_source_SOURCE_DIR}/fpnge.cc")
+    set_target_properties(RenderModuleFpngeAvx2 PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        INTERPROCEDURAL_OPTIMIZATION OFF)
+    target_compile_features(RenderModuleFpngeAvx2 PRIVATE cxx_std_17)
+    target_include_directories(RenderModuleFpngeAvx2 PRIVATE "${fpnge_source_SOURCE_DIR}")
+    target_compile_options(RenderModuleFpngeAvx2 PRIVATE -mavx2 -mpclmul)
+    set(RENDER_MODULE_HAVE_FPNGE ON)
+    message(STATUS "RenderModule PNG: FPNGE AVX2 acceleration enabled")
+elseif(RENDER_MODULE_ENABLE_FPNGE)
+    message(STATUS "RenderModule PNG: FPNGE unavailable on this platform/compiler; using FPNG")
+endif()
 
 FetchContent_Declare(
     roboto_font
@@ -304,7 +361,7 @@ install(
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-install(FILES third_party/PNG_NOTICE.md third_party/WEB_NOTICE.md
+install(FILES third_party/PNG_NOTICE.md third_party/WEB_NOTICE.md third_party/FPNGE_LICENSE.txt
     DESTINATION ${CMAKE_INSTALL_DATADIR}/render-module/licenses)
 
 install(
