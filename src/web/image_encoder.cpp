@@ -6,7 +6,7 @@
 
 namespace render_module::detail {
 ImageCodec ImageEncoder::Codec() const {
-    return codec_==WebSocketImageCodec::Png?ImageCodec::Png:ImageCodec::Jpeg;
+    return codec_;
 }
 const char* ImageCodecName(ImageCodec codec) noexcept {
     return codec==ImageCodec::Png?"png":"jpeg";

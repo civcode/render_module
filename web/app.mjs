@@ -48,15 +48,57 @@ function start() {
     const connection = document.querySelector('#connection'), lease = document.querySelector('#lease');
     const diagnostics = document.querySelector('#diagnostics');
     const video = document.querySelector('#video'), play = document.querySelector('#play');
-    let transport='websocket-image', imageCodec='jpeg', pc=null, dataInput=null, signalChain=Promise.resolve(), remoteIce=[];
+    const transportStatus = document.querySelector('#transport');
+    const streamButtons = [...document.querySelectorAll('#stream-selector [data-stream]')];
+    let stream='jpeg', lastImageStream='jpeg', availableStreams=[], mediaTransport='websocket', inputTransport='websocket-json-v1', requestedStream=null;
+    let pc=null, dataInput=null, signalChain=Promise.resolve(), remoteIce=[], peerGeneration=0;
     function closePeer() {
+        ++peerGeneration;
         if (dataInput) { dataInput.close(); dataInput = null; }
         if (pc) { pc.ontrack = pc.onicecandidate = pc.onconnectionstatechange = pc.ondatachannel = null; pc.close(); pc = null; }
-        remoteIce = []; video.srcObject = null; video.dataset.framesDecoded = '0'; play.hidden = true;
+        remoteIce = []; signalChain = Promise.resolve(); video.srcObject = null; video.dataset.framesDecoded = '0'; play.hidden = true;
     }
     function signaling(type, data = {}) { return send(type, {session: connection.dataset.session, ...data}); }
-    async function mediaSignal(message, current) {
-        if (socket !== current || current.readyState !== WebSocket.OPEN) return;
+    function updateStreamButtons() {
+        for (const button of streamButtons) {
+            const mode = button.dataset.stream;
+            button.hidden = !availableStreams.includes(mode);
+            button.disabled = requestedStream !== null || !availableStreams.includes(mode);
+            button.setAttribute('aria-pressed', String(mode === stream));
+        }
+    }
+    function updateFooter() {
+        const label = stream === 'h264' ? 'H.264' : stream.toUpperCase();
+        const transport = mediaTransport === 'webrtc' ? 'WebRTC' : 'WebSocket';
+        const connecting = stream === 'h264' && (!pc || pc.connectionState !== 'connected') ? ' · Connecting…' : '';
+        transportStatus.textContent = `${label} · ${transport}${connecting}`;
+    }
+    function setStreamState(next, nextMedia, nextInput, control) {
+        if (!['jpeg','png','h264'].includes(next)) throw Error('stream');
+        if (nextMedia !== (next === 'h264' ? 'webrtc' : 'websocket')) throw Error('media transport');
+        if (nextInput !== (next === 'h264' ? 'datachannel-v1' : 'websocket-json-v1')) throw Error('input transport');
+        const changed = next !== stream;
+        if (changed && (stream === 'h264' || next === 'h264')) closePeer();
+        stream = next; mediaTransport = nextMedia; inputTransport = nextInput; requestedStream = null;
+        if (stream !== 'h264') lastImageStream = stream;
+        canvas.hidden = stream === 'h264'; video.hidden = stream !== 'h264';
+        document.querySelector('#acquire-control').hidden = document.querySelector('#release-control').hidden = stream !== 'h264';
+        setController(Boolean(control)); updateStreamButtons(); updateFooter(); layout();
+        if (stream === 'h264' && (changed || !pc)) signaling('hello');
+        else if (stream !== 'h264') attempt = 0;
+    }
+    function requestStream(target) {
+        if (requestedStream !== null || target === stream || !availableStreams.includes(target)) return false;
+        release(); requestedStream = target; updateStreamButtons();
+        if (!send('set_stream', {stream: target})) { requestedStream = null; updateStreamButtons(); return false; }
+        return true;
+    }
+    function requestImageFallback(reason) {
+        diagnostics.textContent = `${reason}; returning to ${lastImageStream.toUpperCase()}.`;
+        if (stream === 'h264' && requestedStream === null && availableStreams.includes(lastImageStream)) requestStream(lastImageStream);
+    }
+    async function mediaSignal(message, current, generation) {
+        if (socket !== current || current.readyState !== WebSocket.OPEN || generation !== peerGeneration || stream !== 'h264') return;
         if (message.session !== connection.dataset.session) throw Error('stale media session');
         if (message.type === 'hello') {
             if (pc || !Array.isArray(message.iceServers) || message.iceServers.length > 8) throw Error('invalid hello');
@@ -70,11 +112,11 @@ function start() {
                 viewportAccepted: message => {
                     display.dataset.width = String(message.width); display.dataset.height = String(message.height);
                 },
-                failed: () => { if (pc === peer && socket === current) current.close(); }
+                failed: () => { if (pc === peer && socket === current && generation === peerGeneration) requestImageFallback('WebRTC input failed'); }
             });
             dataInput = input;
             peer.ondatachannel = event => {
-                if (pc !== peer || socket !== current) event.channel.close();
+                if (pc !== peer || socket !== current || generation !== peerGeneration) event.channel.close();
                 else input.attach(event.channel);
             };
             let iceEnded = false;
@@ -84,20 +126,21 @@ function start() {
                 else { iceEnded = true; signaling('ice-complete'); }
             };
             peer.ontrack = event => {
-                if (pc !== peer || event.track.kind !== 'video') return;
+                if (pc !== peer || generation !== peerGeneration || event.track.kind !== 'video') return;
                 video.srcObject = event.streams[0] || new MediaStream([event.track]);
-                video.play().catch(() => { if (pc === peer) play.hidden = false; });
+                video.play().catch(() => { if (pc === peer && generation === peerGeneration) play.hidden = false; });
             };
             peer.onconnectionstatechange = () => {
-                if (pc !== peer) return;
+                if (pc !== peer || generation !== peerGeneration) return;
                 video.dataset.connection = peer.connectionState;
-                if (peer.connectionState === 'failed') current.close();
+                if (peer.connectionState === 'failed') requestImageFallback('WebRTC connection failed');
+                updateFooter();
             };
         } else if (message.type === 'offer') {
             const peer = pc;
             if (!peer || typeof message.sdp !== 'string' || message.sdp.length > 32768 || peer.remoteDescription) throw Error('invalid offer');
             await peer.setRemoteDescription({type: 'offer', sdp: message.sdp});
-            if (pc !== peer || socket !== current) return;
+            if (pc !== peer || socket !== current || generation !== peerGeneration) return;
             for (const candidate of remoteIce) await peer.addIceCandidate(candidate);
             remoteIce = [];
             const answer = await peer.createAnswer();
@@ -118,7 +161,7 @@ function start() {
                 receiveExtension = true;
             }
             await peer.setLocalDescription(answer);
-            if (pc !== peer || socket !== current) return;
+            if (pc !== peer || socket !== current || generation !== peerGeneration) return;
             video.dataset.offers = String(Number(video.dataset.offers) + 1);
             // Firefox drops unknown fmtp parameters when serializing local SDP.
             // Preserve this capability-checked RFC 6184 receive declaration on
@@ -132,8 +175,7 @@ function start() {
             if (candidate && (typeof candidate.candidate !== 'string' || candidate.candidate.length > 1024 || !['video','0'].includes(candidate.sdpMid))) throw Error('invalid ICE');
             if (pc.remoteDescription) await pc.addIceCandidate(candidate);
             else { if (remoteIce.length >= 65) throw Error('ICE overflow'); remoteIce.push(candidate); }
-        } else if (message.type === 'webrtc-state') video.dataset.iceState = message.state;
-        else if (message.type === 'error') { diagnostics.textContent = 'WebRTC failed; reconnecting. JPEG mode is available in server configuration.'; current.close(); }
+        } else if (message.type === 'webrtc-state') { video.dataset.iceState = message.state; updateFooter(); }
     }
     video.addEventListener('loadedmetadata', layout);
     video.addEventListener('resize', layout);
@@ -166,14 +208,15 @@ function start() {
     const keys = new Set(), buttons = new Set();
     const bits = [['left', 1], ['right', 2], ['middle', 4], ['extra1', 8], ['extra2', 16]];
     function send(type, data = {}) {
-        if (transport === 'webrtc' && !['hello','answer','ice-candidate','ice-complete'].includes(type))
+        const webSocketControl = ['hello','answer','ice-candidate','ice-complete','set_stream','frame_ack'].includes(type);
+        if (inputTransport === 'datachannel-v1' && !webSocketControl)
             return dataInput?.send(type, data) || false;
         if (!socket || socket.readyState !== WebSocket.OPEN) return false;
         if (socket.bufferedAmount > 65536) { socket.close(); return false; }
-        socket.send(JSON.stringify({ v: 1, type, seq: ++sequence, ...data })); return true;
+        socket.send(JSON.stringify({ v: 2, type, seq: ++sequence, ...data })); return true;
     }
     function layout() {
-        if (transport === 'webrtc' && video.videoWidth && video.videoHeight) { frameWidth = video.videoWidth; frameHeight = video.videoHeight; }
+        if (stream === 'h264' && video.videoWidth && video.videoHeight) { frameWidth = video.videoWidth; frameHeight = video.videoHeight; }
         rect = contentRect(display.clientWidth, display.clientHeight, frameWidth, frameHeight);
         if (!rect) return;
         for (const element of [canvas, video, surface]) Object.assign(element.style,
@@ -206,7 +249,7 @@ function start() {
     }
     function setMove(event, p) {
         position = p; pointerSource = ['mouse', 'touch', 'pen'].includes(event.pointerType) ? event.pointerType : 'mouse';
-        if (transport === 'webrtc') { move = null; send('mouse_move', {...p, source:pointerSource}); }
+        if (stream === 'h264') { move = null; send('mouse_move', {...p, source:pointerSource}); }
         else move = {...p, source:pointerSource};
     }
     function syncButtons(mask) {
@@ -318,7 +361,7 @@ function start() {
     }
     function connect() {
         clearTimeout(retry); closePeer(); signalChain = Promise.resolve();
-        release(false); setController(false); pending = null; sequence = 0; lastId = 0n;
+        release(false); setController(false); pending = null; sequence = 0; lastId = 0n; requestedStream = null; availableStreams = []; updateStreamButtons();
         const url = new URL('/api/ws', location.href); url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const current = new WebSocket(url); socket = current; current.binaryType = 'arraybuffer';
         let pendingSignals = 0;
@@ -329,43 +372,46 @@ function start() {
             try {
                 if (typeof event.data === 'string') {
                     if (event.data.length > 65536) throw Error('message size');
-                    const message = JSON.parse(event.data); if (message.v !== 1) throw Error('version');
+                    const message = JSON.parse(event.data); if (message.v !== 2) throw Error('version');
                     if (message.type === 'welcome') {
-                        connection.dataset.session=message.session; transport=message.transport||'websocket-image';
-                        imageCodec=message.imageCodec;
-                        const validCodec=transport==='webrtc'?imageCodec==='inactive':['jpeg','png'].includes(imageCodec);
-                        if(!['websocket-image','webrtc'].includes(transport)||!validCodec||
-                           message.inputTransport!==(transport==='webrtc'?'datachannel-v1':'websocket-json-v1')) throw Error('transport');
-                        if(transport==='websocket-image') attempt=0;
-                        canvas.hidden = transport === 'webrtc'; video.hidden = transport !== 'webrtc';
-                        document.querySelector('#transport').textContent=transport==='webrtc'?'WebRTC H.264 · DataChannel input':
-                            `WebSocket ${imageCodec.toUpperCase()} image · WebSocket input`;
-                        document.querySelector('#acquire-control').hidden = document.querySelector('#release-control').hidden = transport !== 'webrtc';
-                        setController(transport==='websocket-image'&&message.control);
-                        if (transport === 'webrtc') signaling('hello');
+                        connection.dataset.session=message.session;
+                        if (!Array.isArray(message.availableStreams) || message.availableStreams.length < 2 || message.availableStreams.length > 3 ||
+                            message.availableStreams.some(value => !['jpeg','png','h264'].includes(value)) ||
+                            new Set(message.availableStreams).size !== message.availableStreams.length || !message.availableStreams.includes(message.stream)) throw Error('streams');
+                        availableStreams = [...message.availableStreams];
+                        setStreamState(message.stream,message.mediaTransport,message.inputTransport,message.control);
                     }
-                    if (['hello','offer','ice-candidate','ice-complete','webrtc-state','error'].includes(message.type)) {
-                        if (transport !== 'webrtc' || ++pendingSignals > 96) throw Error('unexpected signaling');
-                        signalChain = signalChain.then(() => mediaSignal(message, current)).catch(() => {
-                            if (socket === current) { diagnostics.textContent = 'WebRTC negotiation failed; JPEG mode is available in server configuration.'; current.close(); }
+                    if (message.type === 'stream_changed') {
+                        if (!availableStreams.includes(message.stream)) throw Error('stream change');
+                        setStreamState(message.stream,message.mediaTransport,message.inputTransport,message.control);
+                    }
+                    if (message.type === 'stream_error') {
+                        requestedStream = null; updateStreamButtons(); updateFooter();
+                        diagnostics.textContent = `Stream switch to ${String(message.stream).toUpperCase()} failed (${message.code || 'error'}).`;
+                    }
+                    if (['hello','offer','ice-candidate','ice-complete','webrtc-state'].includes(message.type)) {
+                        if (stream !== 'h264' || ++pendingSignals > 96) throw Error('unexpected signaling');
+                        const generation = peerGeneration;
+                        signalChain = signalChain.then(() => mediaSignal(message, current, generation)).catch(() => {
+                            if (socket === current && generation === peerGeneration) requestImageFallback('WebRTC negotiation failed');
                         }).finally(() => { --pendingSignals; });
                     }
-                    if(message.type==='lease'&&transport==='websocket-image') setController(message.control);
+                    if(message.type==='lease'&&stream!=='h264') setController(message.control);
                     if (message.type === 'view_only') setController(false);
                     if (message.type === 'input_reset') release();
                     if (message.type === 'viewport_accepted') {
                         display.dataset.width = String(message.width); display.dataset.height = String(message.height);
                     }
                 } else {
-                    if(transport==='webrtc') throw Error('Image frame in WebRTC mode');
-                    const frame=parseFrame(event.data); if(frame.codec!==imageCodec) throw Error('Unexpected image codec'); if (BigInt(frame.id) <= lastId) throw Error('stale frame'); lastId = BigInt(frame.id);
+                    if(stream==='h264') throw Error('Image frame in WebRTC mode');
+                    const frame=parseFrame(event.data); if(frame.codec!==stream) throw Error('Unexpected image codec'); if (BigInt(frame.id) <= lastId) throw Error('stale frame'); lastId = BigInt(frame.id);
                     pending = { frame, socket: current }; decode(); // One active decode, one replaceable pending frame.
                 }
             } catch { current.close(1002, 'Protocol error'); }
         };
         current.onclose = () => {
             if (socket !== current) return;
-            closePeer(); release(false); setController(false); pending = null; connection.textContent = 'Disconnected · retrying';
+            closePeer(); release(false); setController(false); pending = null; requestedStream = null; availableStreams = []; updateStreamButtons(); connection.textContent = 'Disconnected · retrying';
             retry = setTimeout(connect, Math.min(8000, 250 * 2 ** Math.min(attempt++, 5)));
         };
     }
@@ -380,6 +426,7 @@ function start() {
     document.querySelector('#reconnect').addEventListener('click', () => { if (socket) socket.close(); else connect(); });
     document.querySelector('#acquire-control').addEventListener('click', () => send('acquire_control'));
     document.querySelector('#release-control').addEventListener('click', () => send('release_control'));
+    for (const button of streamButtons) button.addEventListener('click', () => requestStream(button.dataset.stream));
     new ResizeObserver(() => { layout(); clearTimeout(resizeTimer); resizeTimer = setTimeout(viewport, 150); }).observe(display);
     setInterval(snapshot, 750);
     function animation() { flushMove(); dataInput?.flushFast(); dataInput?.drain(); requestAnimationFrame(animation); }

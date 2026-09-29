@@ -7,7 +7,7 @@
 #include <vector>
 
 namespace render_module::detail {
-constexpr unsigned WebProtocolVersion = 1;
+constexpr unsigned WebProtocolVersion = 2;
 constexpr unsigned WebImageProtocolVersion = 2;
 constexpr std::size_t WebMessageLimit = 8192;
 constexpr std::size_t WebSignalingLimit = 65536;
@@ -20,9 +20,10 @@ struct WebInputState {
     std::optional<RemoteMouseSource> source;
 };
 struct WebMessage {
-    enum class Kind { Input, Release, Viewport, FrameAck, RtcHello, RtcAnswer, RtcCandidate, RtcComplete } kind = Kind::Input;
+    enum class Kind { Input, Release, Viewport, FrameAck, SetStream, RtcHello, RtcAnswer, RtcCandidate, RtcComplete } kind = Kind::Input;
     std::string session, sdp, candidate, mid;
     std::uint64_t sequence = 0, frameId = 0;
+    WebStreamMode stream = WebStreamMode::Jpeg;
     WebSize viewport;
     WebInputState state;
     std::vector<RemoteInputEvent> events;

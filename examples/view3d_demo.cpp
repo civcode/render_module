@@ -36,10 +36,8 @@ int main(int argc, char** argv) {
         ("headless-context", "Headless GL context provider: glfw-null-egl or native-egl",
             cxxopts::value<std::string>(), "CONTEXT");
     options.add_options("Web")
-        ("web-transport", "Web transport: jpeg or webrtc",
-            cxxopts::value<std::string>(), "TRANSPORT")
-        ("web-image-codec", "WebSocket image codec: jpeg or png",
-            cxxopts::value<std::string>(), "CODEC")
+        ("web-stream", "Initial web stream: jpeg, png, or h264",
+            cxxopts::value<std::string>(), "STREAM")
         ("web-bind", "Web server bind address",
             cxxopts::value<std::string>(), "ADDRESS")
         ("web-port", "Web server port in the range 0..65535",
@@ -91,29 +89,17 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (result.count("web-transport") != 0) {
-            const std::string value = result["web-transport"].as<std::string>();
+        if (result.count("web-stream") != 0) {
+            const std::string value = result["web-stream"].as<std::string>();
             if (value == "jpeg")
-                config.web.transport = render_module::WebTransport::JpegWebSocket;
-            else if (value == "webrtc")
-                config.web.transport = render_module::WebTransport::WebRtc;
-            else {
-                std::fprintf(stderr,
-                    "Invalid --web-transport '%s'; expected jpeg or webrtc.\n",
-                    value.c_str());
-                return 1;
-            }
-        }
-
-        if (result.count("web-image-codec") != 0) {
-            const std::string value = result["web-image-codec"].as<std::string>();
-            if (value == "jpeg")
-                config.web.imageCodec = render_module::WebSocketImageCodec::Jpeg;
+                config.web.initialStream = render_module::WebStreamMode::Jpeg;
             else if (value == "png")
-                config.web.imageCodec = render_module::WebSocketImageCodec::Png;
+                config.web.initialStream = render_module::WebStreamMode::Png;
+            else if (value == "h264")
+                config.web.initialStream = render_module::WebStreamMode::H264;
             else {
                 std::fprintf(stderr,
-                    "Invalid --web-image-codec '%s'; expected jpeg or png.\n",
+                    "Invalid --web-stream '%s'; expected jpeg, png, or h264.\n",
                     value.c_str());
                 return 1;
             }

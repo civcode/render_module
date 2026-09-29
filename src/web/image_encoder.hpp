@@ -1,6 +1,5 @@
 #pragma once
 #include "present/image_presenter.hpp"
-#include "render_module/config.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -15,12 +14,12 @@ struct EncodedImage {
 };
 class ImageEncoder {
 public:
-    ImageEncoder(WebSocketImageCodec codec,int jpegQuality,std::size_t limit)
+    ImageEncoder(ImageCodec codec,int jpegQuality,std::size_t limit)
         :codec_(codec),jpegQuality_(jpegQuality),limit_(limit) {}
     bool Encode(const ImageRgba&,std::uint64_t frameId,EncodedImage&) const;
     ImageCodec Codec() const;
 private:
-    WebSocketImageCodec codec_;
+    ImageCodec codec_;
     int jpegQuality_;
     std::size_t limit_;
 };

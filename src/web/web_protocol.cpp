@@ -70,15 +70,12 @@ WebSize ClampWebViewport(int w, int h, const WebConfig& config) {
     if (w < 1 || h < 1 || w > 16384 || h > 16384) return {};
     const double scale = std::min({1.0, double(config.maxWidth)/w, double(config.maxHeight)/h});
     WebSize size{std::max(1, int(std::floor(w*scale))), std::max(1, int(std::floor(h*scale)))};
-    if(config.transport==WebTransport::WebRtc) {
-        size.width=std::max(16,size.width&~1); size.height=std::max(16,size.height&~1);
-    }
     return size;
 }
 bool ParseWebMessage(std::string_view text, const WebConfig& config,
                      const WebInputState& previous, WebMessage& result) {
     try {
-        Require(text.size() <= (config.transport == WebTransport::WebRtc ? WebSignalingLimit : WebMessageLimit));
+        Require(text.size() <= WebSignalingLimit);
         boost::json::parse_options options; options.max_depth = 8;
         auto value = boost::json::parse(text, {}, options);
         const auto& o = value.as_object();
@@ -91,7 +88,6 @@ bool ParseWebMessage(std::string_view text, const WebConfig& config,
         const bool signaling = type=="hello" || type=="answer" || type=="ice-candidate" || type=="ice-complete";
         Require(signaling || text.size()<=WebMessageLimit);
         if (signaling) {
-            Require(config.transport==WebTransport::WebRtc);
             next.session=String(o.at("session"));
             Require(next.session.size()==32 && next.session.find_first_not_of("0123456789abcdef")==std::string::npos);
             if(type=="hello") next.kind=WebMessage::Kind::RtcHello;
@@ -102,6 +98,13 @@ bool ParseWebMessage(std::string_view text, const WebConfig& config,
                 next.kind=WebMessage::Kind::RtcCandidate; next.candidate=String(o.at("candidate")); next.mid=String(o.at("mid"));
                 Require(!next.candidate.empty() && next.candidate.size()<=1024 && (next.mid=="video" || next.mid=="0"));
             } else next.kind=WebMessage::Kind::RtcComplete;
+        } else if (type == "set_stream") {
+            next.kind = WebMessage::Kind::SetStream;
+            const auto stream = String(o.at("stream"));
+            if (stream == "jpeg") next.stream = WebStreamMode::Jpeg;
+            else if (stream == "png") next.stream = WebStreamMode::Png;
+            else if (stream == "h264") next.stream = WebStreamMode::H264;
+            else Require(false);
         } else if (type == "frame_ack") {
             next.kind = WebMessage::Kind::FrameAck;
             const auto& frame = o.at("frameId");

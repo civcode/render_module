@@ -51,6 +51,17 @@ void Headers(http::response<http::string_body>& response) {
     response.set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     response.set(http::field::cache_control, "no-store");
 }
+bool IsImageStream(WebStreamMode stream) { return stream==WebStreamMode::Jpeg || stream==WebStreamMode::Png; }
+const char* StreamName(WebStreamMode stream) {
+    switch(stream) {
+        case WebStreamMode::Jpeg: return "jpeg";
+        case WebStreamMode::Png: return "png";
+        case WebStreamMode::H264: return "h264";
+    }
+    return "unknown";
+}
+const char* MediaTransport(WebStreamMode stream) { return IsImageStream(stream)?"websocket":"webrtc"; }
+const char* InputTransport(WebStreamMode stream) { return IsImageStream(stream)?"websocket-json-v1":"datachannel-v1"; }
 } // namespace
 
 struct WebServer::Impl {
@@ -73,8 +84,9 @@ struct WebServer::Impl {
     std::mutex mailbox;
     WebSize requested, actual;
     bool resizePending = false;
-    std::shared_ptr<const std::vector<unsigned char>> latest;
-    std::uint64_t latestId = 0;
+    struct PublishedImage { std::shared_ptr<const std::vector<unsigned char>> packet; std::uint64_t id=0; };
+    PublishedImage latestJpeg, latestPng;
+    std::atomic<unsigned> jpegSessions{0}, pngSessions{0}, h264Sessions{0};
     Impl(WebServer& owner_, WebConfig config_, std::shared_ptr<RemoteInputQueue> input_, std::shared_ptr<video::VideoPipeline> video_)
         : owner(owner_), config(std::move(config_)), input(std::move(input_)), video(std::move(video_)) {}
     void Accept();
@@ -82,6 +94,38 @@ struct WebServer::Impl {
     void Elect();
     void Remove(Session* session);
     void Relinquish(Session* session);
+    bool Available(WebStreamMode stream) const {
+        if(stream==WebStreamMode::Jpeg || stream==WebStreamMode::Png) return true;
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+        return stream==WebStreamMode::H264 && bool(hub) && config.maxWidth>=16 && config.maxHeight>=16;
+#else
+        return false;
+#endif
+    }
+    WebSize ConstrainViewport(WebSize size) const {
+        if(!size.width || !size.height) return size;
+        if(h264Sessions.load()!=0) {
+            size.width=std::max(16,size.width);
+            size.height=std::max(16,size.height);
+        }
+        return size;
+    }
+    boost::json::array AvailableStreams() const {
+        boost::json::array streams; streams.push_back("jpeg"); streams.push_back("png");
+        if(Available(WebStreamMode::H264)) streams.push_back("h264");
+        return streams;
+    }
+    void AddDemand(WebStreamMode stream, int delta) {
+        auto adjust=[delta](std::atomic<unsigned>& value) { if(delta>0) value.fetch_add(unsigned(delta)); else value.fetch_sub(unsigned(-delta)); };
+        if(stream==WebStreamMode::Jpeg) adjust(jpegSessions);
+        else if(stream==WebStreamMode::Png) adjust(pngSessions);
+        else if(stream==WebStreamMode::H264) adjust(h264Sessions);
+    }
+    void DropImage(WebStreamMode stream) {
+        ++owner.counters.dropped;
+        if(stream==WebStreamMode::Jpeg) ++owner.counters.jpegDropped;
+        else if(stream==WebStreamMode::Png) ++owner.counters.pngDropped;
+    }
     bool Origin(const http::request<http::string_body>& request) const {
         if (request.count(http::field::origin) != 1) return false;
         const std::string origin(request[http::field::origin]);
@@ -104,21 +148,23 @@ struct WebServer::Impl {
     std::string Metrics() {
         auto& c = owner.counters;
         WebSize size; { std::lock_guard<std::mutex> lock(mailbox); size = actual; }
-        const auto codec=config.imageCodec==WebSocketImageCodec::Png?ImageCodec::Png:ImageCodec::Jpeg;
-        const auto frames=c.encoded.load(), encodeUs=c.encodeMicros.load();
+        const auto jpegFrames=c.jpegEncoded.load(), pngFrames=c.pngEncoded.load();
         boost::json::object result{{"version",RENDER_MODULE_WEB_VERSION},{"build",RENDER_MODULE_WEB_BUILD_ID},
-            {"protocol",WebProtocolVersion},{"image_protocol",WebImageProtocolVersion},{"backend","web-image"},
-            {"image_codec",ImageCodecName(codec)},{"sessions",c.sessions.load()},{"controller",c.controller.load()},
-            {"framesRendered",c.rendered.load()},{"image_frames_encoded",frames},{"image_frames_dropped",c.dropped.load()},
-            {"image_bytes_encoded",c.encodedBytes.load()},{"jpegEncoded",codec==ImageCodec::Jpeg?frames:0},
-            {"jpegDropped",codec==ImageCodec::Jpeg?c.dropped.load():0},{"pngEncoded",codec==ImageCodec::Png?frames:0},
-            {"pngDropped",codec==ImageCodec::Png?c.dropped.load():0},{"jpeg_encode_ms",codec==ImageCodec::Jpeg&&frames?double(encodeUs)/frames/1000:0},
-            {"png_encode_ms",codec==ImageCodec::Png&&frames?double(encodeUs)/frames/1000:0},{"bytesTransmitted",c.bytes.load()},
-            {"inputAccepted",c.accepted.load()},{"inputRejected",c.rejected.load()},{"inputQueueFull",c.full.load()},
-            {"encodeMicros",encodeUs},{"width",size.width},{"height",size.height}};
+            {"protocol",WebProtocolVersion},{"image_protocol",WebImageProtocolVersion},{"backend","web"},
+            {"initial_stream",StreamName(config.initialStream)},{"available_streams",AvailableStreams()},
+            {"sessions",c.sessions.load()},{"controller",c.controller.load()},
+            {"stream_sessions",boost::json::object{{"jpeg",jpegSessions.load()},{"png",pngSessions.load()},{"h264",h264Sessions.load()}}},
+            {"framesRendered",c.rendered.load()},{"image_frames_encoded",c.encoded.load()},{"image_frames_dropped",c.dropped.load()},
+            {"image_bytes_encoded",c.encodedBytes.load()},{"jpegEncoded",jpegFrames},{"jpegDropped",c.jpegDropped.load()},
+            {"pngEncoded",pngFrames},{"pngDropped",c.pngDropped.load()},
+            {"jpeg_encode_ms",jpegFrames?double(c.jpegEncodeMicros.load())/jpegFrames/1000:0},
+            {"png_encode_ms",pngFrames?double(c.pngEncodeMicros.load())/pngFrames/1000:0},
+            {"bytesTransmitted",c.bytes.load()},{"inputAccepted",c.accepted.load()},{"inputRejected",c.rejected.load()},
+            {"inputQueueFull",c.full.load()},{"encodeMicros",c.encodeMicros.load()},
+            {"streamSwitchRequests",c.streamSwitchRequests.load()},{"streamSwitches",c.streamSwitches.load()},
+            {"streamSwitchFailures",c.streamSwitchFailures.load()},{"width",size.width},{"height",size.height}};
 #ifdef RENDER_MODULE_ENABLE_WEBRTC
         if(hub) {
-            result["backend"]="web-webrtc";result["image_codec"]="inactive";
             boost::json::array clients; unsigned connected=0;
             std::uint64_t packets=0,bytes=0,nacks=0,retransmits=0,plis=0,submitted=0,rejected=0,dropped=0;
             for(const auto& s:hub->Snapshot()) {
@@ -167,14 +213,16 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
     int streamState=-1;
 #endif
     bool wantsControl=true;
-    Clock::time_point connectedAt=Clock::now();
+    Clock::time_point connectedAt=Clock::now(), mediaStartedAt=connectedAt;
     unsigned signalingMessages=0;
     http::request_parser<http::string_body> parser;
     http::response<http::string_body> response;
     std::string id;
     WebInputState state;
+    WebStreamMode stream=WebStreamMode::Jpeg, previousImageStream=WebStreamMode::Jpeg;
+    std::optional<WebStreamMode> requestedStream;
     std::uint64_t sequence = 0, sentId = 0, offeredId = 0;
-    bool ready = false, dead = false, writing = false, awaitingAck = false;
+    bool ready = false, dead = false, writing = false, awaitingAck = false, demandCounted=false;
     bool closeRequested = false;
     std::deque<std::shared_ptr<const std::string>> controls;
     std::shared_ptr<const std::vector<unsigned char>> pending, inFlight;
@@ -183,7 +231,8 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
     Clock::time_point ackDeadline{}, writeDeadline{}, rateStart = Clock::now();
     unsigned messages = 0;
     Session(Impl& s, tcp::socket socket) : server(s), ws(std::move(socket)),
-        buffer((s.config.transport==WebTransport::WebRtc?WebSignalingLimit:WebMessageLimit)+16384), id(RandomId()) {
+        buffer(WebSignalingLimit+16384), id(RandomId()), stream(s.config.initialStream),
+        previousImageStream(IsImageStream(s.config.initialStream)?s.config.initialStream:WebStreamMode::Jpeg) {
         parser.header_limit(8192); parser.body_limit(WebMessageLimit);
         state.input.focused = false;
     }
@@ -220,16 +269,16 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
             // Count pending upgrades too; no parallel handshakes can bypass the cap.
             ready = true; ++server.owner.counters.sessions;
             beast::get_lowest_layer(ws).expires_never();
-            ws.read_message_max(server.config.transport==WebTransport::WebRtc?WebSignalingLimit:WebMessageLimit);
+            ws.read_message_max(WebSignalingLimit);
             ws.set_option(websocket::stream_base::timeout{std::chrono::seconds(3), std::chrono::seconds(15), true});
             ws.async_accept(req, [self=shared_from_this()](beast::error_code error) {
                 if (error) { self->Finish(); return; }
+                self->demandCounted=true; self->server.AddDemand(self->stream,1);
+                self->mediaStartedAt=Clock::now();
                 self->server.Elect();
                 self->Control(Json({{"type", "welcome"}, {"session", self->id}, {"control", self->server.controller == self.get()},
-                    {"transport",self->server.config.transport==WebTransport::WebRtc?"webrtc":"websocket-image"},
-                    {"imageCodec",self->server.config.transport==WebTransport::WebRtc?"inactive":
-                        (self->server.config.imageCodec==WebSocketImageCodec::Png?"png":"jpeg")},
-                    {"inputTransport",self->server.config.transport==WebTransport::WebRtc?"datachannel-v1":"websocket-json-v1"}}));
+                    {"stream",StreamName(self->stream)},{"availableStreams",self->server.AvailableStreams()},
+                    {"mediaTransport",MediaTransport(self->stream)},{"inputTransport",InputTransport(self->stream)}}));
                 self->Read();
             });
             return;
@@ -257,10 +306,66 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
         if (controls.size() >= 16) { Finish(); return; }
         controls.push_back(std::make_shared<const std::string>(std::move(message))); Write();
     }
+    void StreamChanged() {
+        Control(Json({{"type","stream_changed"},{"stream",StreamName(stream)},
+            {"mediaTransport",MediaTransport(stream)},{"inputTransport",InputTransport(stream)},
+            {"control",server.controller==this}}));
+    }
+    void StreamError(WebStreamMode target, const char* code) {
+        ++server.owner.counters.streamSwitchFailures;
+        Control(Json({{"type","stream_error"},{"stream",StreamName(target)},{"code",code}}));
+    }
+    void StopMedia() {
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+        if(dataInput) { dataInput->Close(); dataInput.reset(); }
+        if(server.hub) server.hub->Remove(id);
+        media.reset(); streamState=-1; syncEpoch=0; pingUs=0;
+#endif
+    }
+    void CommitStream(WebStreamMode target) {
+        requestedStream.reset();
+        if(target==stream) { StreamChanged(); return; }
+        if(!server.Available(target)) { StreamError(target,"unavailable"); return; }
+        if(target==WebStreamMode::H264) {
+            std::lock_guard<std::mutex> lock(server.mailbox);
+            if((server.actual.width && server.actual.width<16) || (server.actual.height && server.actual.height<16)) {
+                StreamError(target,"transition_failed"); return;
+            }
+        }
+        const bool transportChange=IsImageStream(stream)!=IsImageStream(target);
+        if(transportChange) { server.input->ReleaseAllInput(); state={}; state.input.focused=false; }
+        if(stream==WebStreamMode::H264) StopMedia();
+        pending.reset(); inFlight.reset(); awaitingAck=false;
+        if(demandCounted) { server.AddDemand(stream,-1); server.AddDemand(target,1); }
+        stream=target; offeredId=0; sentId=0;
+        if(IsImageStream(stream)) previousImageStream=stream;
+        else {
+            mediaStartedAt=Clock::now(); signalingMessages=0;
+#ifdef RENDER_MODULE_ENABLE_WEBRTC
+            lastControl=mediaStartedAt;
+#endif
+        }
+        ++server.owner.counters.streamSwitches;
+        StreamChanged();
+    }
+    void RequestStream(WebStreamMode target) {
+        ++server.owner.counters.streamSwitchRequests;
+        if(!server.Available(target)) { StreamError(target,"unavailable"); return; }
+        if(requestedStream) { StreamError(target,"transition_in_progress"); return; }
+        if(target==stream) { StreamChanged(); return; }
+        pending.reset();
+        if(IsImageStream(stream) && awaitingAck) { requestedStream=target; return; }
+        CommitStream(target);
+    }
+    void FailH264(const char* code) {
+        if(stream!=WebStreamMode::H264) return;
+        StreamError(WebStreamMode::H264,code);
+        CommitStream(previousImageStream);
+    }
     void Offer(std::shared_ptr<const std::vector<unsigned char>> packet, std::uint64_t frameId) {
-        if (dead || closeRequested || !ready || frameId <= offeredId) return;
+        if (dead || closeRequested || !ready || !IsImageStream(stream) || requestedStream || frameId <= offeredId) return;
         offeredId = frameId;
-        if (pending) ++server.owner.counters.dropped;
+        if (pending) server.DropImage(stream);
         pending = std::move(packet); pendingId = frameId; Write();
     }
     void Write() {
@@ -303,14 +408,19 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
                 self->Reject(); return;
             }
             self->sequence = message.sequence;
-            if (message.kind >= WebMessage::Kind::RtcHello) {
-                if(++self->signalingMessages>128 || message.session!=self->id || !self->Signal(message)) { self->Reject(); return; }
-            } else if (self->server.config.transport==WebTransport::WebRtc) {
-                // Production WebSocket is signaling-only. Never accept a duplicate input path.
-                self->Reject(); return;
+            if (message.kind == WebMessage::Kind::SetStream) {
+                self->RequestStream(message.stream);
+            } else if (message.kind >= WebMessage::Kind::RtcHello) {
+                if(self->stream!=WebStreamMode::H264 || self->requestedStream || ++self->signalingMessages>128 ||
+                   message.session!=self->id || !self->Signal(message)) { self->Reject(); return; }
             } else if (message.kind == WebMessage::Kind::FrameAck) {
-                if (!self->awaitingAck || message.frameId != self->sentId) { self->Reject(); return; }
-                self->awaitingAck = false; self->Write();
+                if (!IsImageStream(self->stream) || !self->awaitingAck || message.frameId != self->sentId) { self->Reject(); return; }
+                self->awaitingAck = false;
+                if(self->requestedStream) { const auto target=*self->requestedStream; self->CommitStream(target); }
+                self->Write();
+            } else if (!IsImageStream(self->stream)) {
+                // H.264 uses the DataChannel for ordinary input; the WebSocket remains control/signaling only.
+                self->Reject(); return;
             } else if (self->server.controller != self.get()) {
                 ++self->server.owner.counters.rejected;
                 self->Control(Json({{"type", "view_only"}}));
@@ -320,7 +430,7 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
     }
     bool Signal(const WebMessage& message) {
 #ifdef RENDER_MODULE_ENABLE_WEBRTC
-        if(!server.hub) return false;
+        if(stream!=WebStreamMode::H264 || !server.hub) return false;
         try {
             if(message.kind==WebMessage::Kind::RtcHello) {
                 if(media) return false;
@@ -329,17 +439,19 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
                 Control(Json({{"type","hello"},{"session",id},{"iceServers",std::move(ice)},
                     {"iceTransportPolicy",server.config.iceRelayOnly?"relay":"all"}}));
                 media=server.hub->Create(id);
-                if(!media) return false;
+                if(!media) { FailH264("transition_failed"); return true; }
                 dataInput=std::make_unique<dc::InputState>(*server.input,[this](dc::Packet packet) {
                     if(media && !media->SendControl(packet)) media->RejectStream();
                 });
-                dataInput->SetController(server.controller==this); return true;
+                dataInput->SetController(server.controller==this);
+                mediaStartedAt=lastControl=Clock::now();
+                return true;
             }
             if(!media) return false;
             if(message.kind==WebMessage::Kind::RtcAnswer) return media->SetRemoteDescription(message.sdp);
             if(message.kind==WebMessage::Kind::RtcCandidate) return media->AddRemoteCandidate(message.candidate,message.mid);
             if(message.kind==WebMessage::Kind::RtcComplete) return media->RemoteIceComplete();
-        } catch(...) { Control(Json({{"type","error"},{"session",id},{"code","negotiation_failed"}})); }
+        } catch(...) { FailH264("transition_failed"); return true; }
 #else
         (void)message;
 #endif
@@ -347,11 +459,10 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
     }
     void MediaTick() {
 #ifdef RENDER_MODULE_ENABLE_WEBRTC
-        if(!server.hub) return;
-        if(!media) { if(Clock::now()-connectedAt>std::chrono::seconds(10)) Close(); return; }
-        if(!media->Healthy()) {
-            Control(Json({{"type","error"},{"session",id},{"code","media_failed"}})); Close(); return;
-        }
+        if(stream!=WebStreamMode::H264) return;
+        if(!server.hub) { FailH264("unavailable"); return; }
+        if(!media) { if(Clock::now()-mediaStartedAt>std::chrono::seconds(10)) FailH264("transition_failed"); return; }
+        if(!media->Healthy()) { FailH264("transition_failed"); return; }
         if(dataInput) {
             const auto before=dataInput->counters;
             const auto stats=media->Snapshot().counters;
@@ -368,7 +479,7 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
                     reply.enabled=dataInput->Enabled(); reply.state.epoch=dataInput->Epoch(); media->SendControl(reply);
                 } else if((packet.type==dc::Type::ClientHello || packet.type==dc::Type::ViewportRequest) && server.controller==this) {
                     std::lock_guard<std::mutex> lock(server.mailbox);
-                    server.requested=ClampWebViewport(packet.width,packet.height,server.config); server.resizePending=true;
+                    server.requested=server.ConstrainViewport(ClampWebViewport(packet.width,packet.height,server.config)); server.resizePending=true;
                 } else if(packet.type==dc::Type::BrowserStats) {
                     stats->browserFastBuffered=packet.fastBuffered; stats->browserControlBuffered=packet.controlBuffered;
                 } else if(packet.type==dc::Type::Pong && pingUs && packet.echoUs==pingUs) {
@@ -383,10 +494,10 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
             stats->inputAccepted+=after.accepted-before.accepted; stats->inputRejected+=after.rejected-before.rejected;
             stats->inputQueueFull+=after.queueFull-before.queueFull; stats->inputResyncs+=after.resyncs-before.resyncs;
             stats->staleFast+=after.staleFast-before.staleFast; stats->inputEnabled=dataInput->Enabled();
-            if(!dataInput->Greeted() && Clock::now()-connectedAt>std::chrono::seconds(15)) { Close(); return; }
-            if(dataInput->Greeted() && Clock::now()-lastControl>std::chrono::seconds(5)) { Close(); return; }
+            if(!dataInput->Greeted() && Clock::now()-mediaStartedAt>std::chrono::seconds(15)) { FailH264("transition_failed"); return; }
+            if(dataInput->Greeted() && Clock::now()-lastControl>std::chrono::seconds(5)) { FailH264("transition_failed"); return; }
             if(dataInput->Epoch()!=syncEpoch) { syncEpoch=dataInput->Epoch(); syncDeadline=Clock::now()+std::chrono::seconds(5); }
-            if(dataInput->Greeted() && dataInput->Controller() && !dataInput->Enabled() && Clock::now()>syncDeadline) { Close(); return; }
+            if(dataInput->Greeted() && dataInput->Controller() && !dataInput->Enabled() && Clock::now()>syncDeadline) { FailH264("transition_failed"); return; }
             const int currentStream=media->Snapshot().connected?1:0;
             if(dataInput->Greeted() && streamState!=currentStream) {
                 streamState=currentStream; dc::Packet state; state.type=dc::Type::StreamState; state.code=currentStream; media->SendControl(state);
@@ -413,7 +524,7 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
         state = message.state;
         if (message.kind == WebMessage::Kind::Viewport) {
             std::lock_guard<std::mutex> lock(server.mailbox);
-            server.requested = message.viewport; server.resizePending = true;
+            server.requested = server.ConstrainViewport(message.viewport); server.resizePending = true;
         } else if (message.kind == WebMessage::Kind::Release) {
             server.input->ReleaseAllInput();
             state = {}; state.input.focused = false; ++c.accepted;
@@ -438,7 +549,7 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
     void NotifyViewport(WebSize size) {
         if(!size.width || (observed.width==size.width && observed.height==size.height)) return;
 #ifdef RENDER_MODULE_ENABLE_WEBRTC
-        if(server.hub) {
+        if(stream==WebStreamMode::H264) {
             if(!dataInput || !dataInput->Greeted() || !media) return;
             dc::Packet packet; packet.type=dc::Type::ViewportAccepted; packet.width=size.width; packet.height=size.height;
             if(!media->SendControl(packet)) return;
@@ -451,24 +562,18 @@ struct WebServer::Impl::Session : std::enable_shared_from_this<Session> {
     void Close() {
         if (dead || closeRequested) return;
         closeRequested = true;
-#ifdef RENDER_MODULE_ENABLE_WEBRTC
-        if(dataInput) dataInput->Close();
-        if(server.hub) server.hub->Remove(id); media.reset();
-#endif
+        StopMedia();
         if (server.controller == this) { server.Relinquish(this); server.Elect(); }
         pending.reset(); controls.clear(); Write();
         if (!ready) Finish();
     }
     void Finish() {
         if (dead) return;
-        dead = true;
-#ifdef RENDER_MODULE_ENABLE_WEBRTC
-        if(dataInput) dataInput->Close();
-        if(server.hub) server.hub->Remove(id); media.reset();
-#endif
+        dead = true; StopMedia();
         beast::error_code error;
         beast::get_lowest_layer(ws).socket().shutdown(tcp::socket::shutdown_both, error);
         beast::get_lowest_layer(ws).socket().close(error);
+        if(demandCounted) { server.AddDemand(stream,-1); demandCounted=false; }
         if (ready) { ready = false; --server.owner.counters.sessions; }
         server.Remove(this);
     }
@@ -492,7 +597,7 @@ void WebServer::Impl::Elect() {
         for (const auto& session : sessions) if (session->ready && session->ws.is_open() && session->wantsControl && !session->dead && !session->closeRequested) {
             controller = session.get(); input->ReleaseAllInput();
 #ifdef RENDER_MODULE_ENABLE_WEBRTC
-            if(hub) { if(session->dataInput) session->dataInput->SetController(true); }
+            if(session->stream==WebStreamMode::H264) { if(session->dataInput) session->dataInput->SetController(true); }
             else
 #endif
                 session->Control(Json({{"type", "lease"}, {"control", true}}));
@@ -518,9 +623,12 @@ void WebServer::Impl::Tick() {
     timer.expires_after(std::chrono::milliseconds(20));
     timer.async_wait([this](beast::error_code error) {
         if (error || stopping) return;
-        std::shared_ptr<const std::vector<unsigned char>> packet;
-        std::uint64_t id; WebSize size;
-        { std::lock_guard<std::mutex> lock(mailbox); packet = std::move(latest); id = latestId; size = actual; }
+        PublishedImage jpeg,png; WebSize size;
+        {
+            std::lock_guard<std::mutex> lock(mailbox);
+            jpeg=std::move(latestJpeg); png=std::move(latestPng); size=actual;
+            latestJpeg={}; latestPng={};
+        }
         auto live = sessions; // Bounded snapshot: callbacks may remove sessions.
         for (const auto& s : live) {
             if (!s->ready || s->dead || !s->ws.is_open()) continue;
@@ -528,7 +636,8 @@ void WebServer::Impl::Tick() {
                 (s->awaitingAck && Clock::now() > s->ackDeadline)) { s->Finish(); continue; }
             s->NotifyViewport(size);
             s->MediaTick();
-            if (packet) s->Offer(packet, id);
+            if(s->stream==WebStreamMode::Jpeg && jpeg.packet) s->Offer(jpeg.packet,jpeg.id);
+            else if(s->stream==WebStreamMode::Png && png.packet) s->Offer(png.packet,png.id);
         }
         Tick();
     });
@@ -539,19 +648,20 @@ WebServer::~WebServer() { Stop(); }
 bool WebServer::Start() {
     auto& s = *impl_; auto& c = s.config;
     try {
-        if(c.transport==WebTransport::WebRtc) {
+        if(c.initialStream!=WebStreamMode::Jpeg && c.initialStream!=WebStreamMode::Png && c.initialStream!=WebStreamMode::H264) return false;
 #ifdef RENDER_MODULE_ENABLE_WEBRTC
-            if(!s.video || !ValidateIceConfiguration(c)) return false;
-            s.hub=std::make_unique<EncodedFrameHub>(s.video,c);
+        if(!ValidateIceConfiguration(c)) return false;
+        if(s.video) {
+            try { s.hub=std::make_unique<EncodedFrameHub>(s.video,c); }
+            catch(...) { s.hub.reset(); }
+        }
+        if(c.initialStream==WebStreamMode::H264 && !s.hub) return false;
 #else
-            return false;
+        if(c.initialStream==WebStreamMode::H264) return false;
 #endif
-        } else if(c.transport!=WebTransport::JpegWebSocket) return false;
-        if(c.imageCodec!=WebSocketImageCodec::Jpeg && c.imageCodec!=WebSocketImageCodec::Png) return false;
         const auto address = net::ip::make_address(c.bindAddress);
         if (!s.input || c.maxClients < 1 || c.maxClients > 32 || c.maxWidth < 1 || c.maxHeight < 1 ||
-            c.maxWidth > 2048 || c.maxHeight > 2048 ||
-            (c.imageCodec==WebSocketImageCodec::Jpeg && (c.jpegQuality<1 || c.jpegQuality>100)) ||
+            c.maxWidth > 2048 || c.maxHeight > 2048 || c.jpegQuality<1 || c.jpegQuality>100 ||
             !std::isfinite(c.fps) || c.fps < 1 || c.fps > 30) return false;
         if (!c.authToken.empty() && (c.authToken.size() < 16 || c.authToken.size() > 128 ||
             c.authToken.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_") != std::string::npos)) return false;
@@ -598,6 +708,10 @@ void WebServer::Stop() {
     s.sessions.clear();
 }
 unsigned WebServer::Port() const { return impl_->port; }
+WebStreamDemand WebServer::Demand() const {
+    return {impl_->jpegSessions.load()!=0,impl_->pngSessions.load()!=0,impl_->h264Sessions.load()!=0};
+}
+bool WebServer::HasH264() const { return impl_->Available(WebStreamMode::H264); }
 bool WebServer::TakeViewport(WebSize& size) {
     std::lock_guard<std::mutex> lock(impl_->mailbox);
     if (!impl_->resizePending) return false;
@@ -606,11 +720,16 @@ bool WebServer::TakeViewport(WebSize& size) {
 void WebServer::ObserveViewport(WebSize size) {
     std::lock_guard<std::mutex> lock(impl_->mailbox); impl_->actual = size;
 }
-void WebServer::Publish(std::shared_ptr<const std::vector<unsigned char>> packet, std::uint64_t id) {
-    if (impl_->config.transport != WebTransport::JpegWebSocket || !packet || packet->size() > WebFrameLimit+28) return;
+void WebServer::PublishImage(ImageCodec codec, std::shared_ptr<const std::vector<unsigned char>> packet, std::uint64_t id) {
+    if (!packet || packet->size() > WebFrameLimit+28 || (codec!=ImageCodec::Jpeg && codec!=ImageCodec::Png)) return;
     std::lock_guard<std::mutex> lock(impl_->mailbox);
-    if (id <= impl_->latestId) return;
-    if (impl_->latest) ++counters.dropped;
-    impl_->latest = std::move(packet); impl_->latestId = id;
+    auto& latest=codec==ImageCodec::Jpeg?impl_->latestJpeg:impl_->latestPng;
+    if (id <= latest.id) return;
+    if (latest.packet) {
+        ++counters.dropped;
+        if(codec==ImageCodec::Jpeg) ++counters.jpegDropped; else ++counters.pngDropped;
+    }
+    latest.packet=std::move(packet); latest.id=id;
 }
+
 } // namespace render_module::detail

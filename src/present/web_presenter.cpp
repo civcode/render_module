@@ -12,42 +12,46 @@
 
 namespace render_module::detail {
 namespace {
+const char* StreamName(WebStreamMode stream) {
+    switch(stream) {
+        case WebStreamMode::Jpeg: return "JPEG";
+        case WebStreamMode::Png: return "PNG";
+        case WebStreamMode::H264: return "H.264";
+    }
+    return "unknown";
+}
 std::shared_ptr<video::VideoPipeline> MakeWebVideo(const Config& config) {
 #ifdef RENDER_MODULE_ENABLE_WEBRTC
-    if(config.web.transport==WebTransport::WebRtc) {
-        auto pipeline=std::make_shared<video::VideoPipeline>();
-        video::EncoderConfig c; c.fps=config.web.fps;
-        if(!video::NormalizeSize(config.width,config.height,c.width,c.height) || !pipeline->Configure(c)) return {};
-        return pipeline;
-    }
+    auto pipeline=std::make_shared<video::VideoPipeline>();
+    video::EncoderConfig c; c.fps=config.web.fps;
+    if(!video::NormalizeSize(config.width,config.height,c.width,c.height) || !pipeline->Configure(c)) return {};
+    return pipeline;
 #else
     (void)config;
-#endif
     return {};
+#endif
 }
 class WebPresenter final : public IPresenter {
 public:
     WebPresenter(const Config& config, std::shared_ptr<RemoteInputQueue> input)
         : pipeline_(MakeWebVideo(config)), server_(config.web, std::move(input), pipeline_),
-          transport_(config.web.transport), encoder_(config.web.imageCodec,config.web.jpegQuality,WebFrameLimit), fps_(config.web.fps) {
+          jpegEncoder_(ImageCodec::Jpeg,config.web.jpegQuality,WebFrameLimit),
+          pngEncoder_(ImageCodec::Png,config.web.jpegQuality,WebFrameLimit), fps_(config.web.fps) {
 #ifdef RENDER_MODULE_ENABLE_WEBRTC
         if(pipeline_) capture_=std::make_unique<VideoCapture>(pipeline_);
 #endif
     }
     bool Start(const Config& config) {
-        if(transport_==WebTransport::WebRtc && (config.width<16 || config.height<16 ||
-           (config.width&1) || (config.height&1))) return false;
         if (config.width > config.web.maxWidth || config.height > config.web.maxHeight || !server_.Start()) return false;
         server_.ObserveViewport({config.width, config.height});
         const std::string host = config.web.bindAddress.find(':') == std::string::npos ?
             config.web.bindAddress : "[" + config.web.bindAddress + "]";
-        std::fprintf(stderr,"RenderModule Web backend (%s; input over %s)\n"
-            "  Size : %dx%d\n  HTTP : http://%s:%u/\n  Auth : %s\n  WebSocket image codec : %s\n",
-            transport_==WebTransport::WebRtc?"WebRTC H.264":"WebSocket image",
-            transport_==WebTransport::WebRtc?"DataChannels":"WebSocket",
+        std::fprintf(stderr,"RenderModule Web backend\n"
+            "  Size            : %dx%d\n  HTTP            : http://%s:%u/\n  Auth            : %s\n"
+            "  Initial stream  : %s\n  Streams         : JPEG, PNG%s\n  JPEG quality    : %d\n",
             config.width,config.height,host.c_str(),server_.Port(),
-            config.web.authToken.empty()?"disabled":"enabled",
-            transport_==WebTransport::WebRtc?"inactive":(encoder_.Codec()==ImageCodec::Png?"PNG":"JPEG"));
+            config.web.authToken.empty()?"disabled":"enabled", StreamName(config.web.initialStream),
+            server_.HasH264()?", H.264":"", config.web.jpegQuality);
         return true;
     }
     bool PrepareFrame() override {
@@ -59,36 +63,56 @@ public:
         ++server_.counters.rendered;
         server_.ObserveViewport({frame.width, frame.height});
         const auto now = Clock::now();
-        if (!server_.HasViewers() || now < nextEncode_) { glFlush(); return true; }
+        const auto demand = server_.Demand();
+        if ((!demand.jpeg && !demand.png && !demand.h264) || now < nextEncode_) { glFlush(); return true; }
         const auto period = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0/fps_));
         nextEncode_ += period;
         if (nextEncode_ <= now) nextEncode_ = now + period; // Fixed cadence, no catch-up bursts.
 #ifdef RENDER_MODULE_ENABLE_WEBRTC
-        if(transport_==WebTransport::WebRtc) return capture_ && capture_->Submit(frame);
+        if(demand.h264 && (!capture_ || !capture_->Submit(frame))) return false;
 #endif
+        if(!demand.jpeg && !demand.png) return true;
         ImageRgba image;
-        if(!ImagePresenter::Read(frame,image)) return false; // Sole Phase 3 GL→top-down flip.
-        EncodedImage encoded;
-        if(!encoder_.Encode(image,frame.frameId,encoded)) {
-            ++server_.counters.dropped; return true; // Includes the explicit 16 MiB encoded limit.
-        }
-        const auto payloadBytes=encoded.bytes.size();
-        auto packet=std::make_shared<const std::vector<unsigned char>>(PackImage(encoded));
-        if(packet->empty()) { ++server_.counters.dropped; return true; }
-        ++server_.counters.encoded; server_.counters.encodedBytes+=payloadBytes;
-        server_.counters.encodeMicros+=std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-now).count();
-        server_.Publish(std::move(packet),frame.frameId);
+        if(!ImagePresenter::Read(frame,image)) return false; // One image readback shared by JPEG and PNG.
+        if(demand.jpeg) EncodeAndPublish(jpegEncoder_,image,frame.frameId);
+        if(demand.png) EncodeAndPublish(pngEncoder_,image,frame.frameId);
         return true;
     }
 private:
+    bool EncodeAndPublish(const ImageEncoder& encoder, const ImageRgba& image, std::uint64_t frameId) {
+        const auto started=Clock::now();
+        EncodedImage encoded;
+        if(!encoder.Encode(image,frameId,encoded)) {
+            ++server_.counters.dropped;
+            if(encoder.Codec()==ImageCodec::Jpeg) ++server_.counters.jpegDropped;
+            else ++server_.counters.pngDropped;
+            return false;
+        }
+        const auto elapsed=std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-started).count();
+        const auto payloadBytes=encoded.bytes.size();
+        auto packet=std::make_shared<const std::vector<unsigned char>>(PackImage(encoded));
+        if(packet->empty()) {
+            ++server_.counters.dropped;
+            if(encoder.Codec()==ImageCodec::Jpeg) ++server_.counters.jpegDropped;
+            else ++server_.counters.pngDropped;
+            return false;
+        }
+        ++server_.counters.encoded; server_.counters.encodedBytes+=payloadBytes; server_.counters.encodeMicros+=elapsed;
+        if(encoder.Codec()==ImageCodec::Jpeg) {
+            ++server_.counters.jpegEncoded; server_.counters.jpegEncodedBytes+=payloadBytes; server_.counters.jpegEncodeMicros+=elapsed;
+        } else {
+            ++server_.counters.pngEncoded; server_.counters.pngEncodedBytes+=payloadBytes; server_.counters.pngEncodeMicros+=elapsed;
+        }
+        server_.PublishImage(encoder.Codec(),std::move(packet),frameId);
+        return true;
+    }
     using Clock = std::chrono::steady_clock;
     std::shared_ptr<video::VideoPipeline> pipeline_;
     WebServer server_;
 #ifdef RENDER_MODULE_ENABLE_WEBRTC
     std::unique_ptr<VideoCapture> capture_;
 #endif
-    WebTransport transport_;
-    ImageEncoder encoder_;
+    ImageEncoder jpegEncoder_, pngEncoder_;
     double fps_;
     Clock::time_point nextEncode_{};
 };
