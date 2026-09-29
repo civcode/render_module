@@ -44,6 +44,18 @@ try {
     await page.waitForFunction(() => document.querySelector('#lease').dataset.control === 'true');
     await page.waitForFunction(expected=>Number(document.querySelector('#picture').dataset.frameId)>0&&
         document.querySelector('#picture').dataset.codec===expected,codec);
+    // JPEG/PNG switches stay on the same authenticated WebSocket/session.
+    const switchSession = await page.locator('#connection').getAttribute('data-session');
+    const alternateCodec = codec === 'jpeg' ? 'png' : 'jpeg';
+    assert.equal(await page.locator('[data-stream="h264"]').isHidden(), true, 'H.264 is omitted when unavailable');
+    await page.locator(`[data-stream="${alternateCodec}"]`).click();
+    await page.waitForFunction(expected => document.querySelector('#picture').dataset.codec === expected, alternateCodec);
+    assert.equal(await page.locator('#connection').getAttribute('data-session'), switchSession, 'image switch keeps WebSocket session');
+    assert.equal(await page.locator('#lease').getAttribute('data-control'), 'true', 'image switch keeps controller lease');
+    assert.ok((await page.locator('#transport').textContent()).includes('WebSocket'));
+    await page.locator(`[data-stream="${codec}"]`).click();
+    await page.waitForFunction(expected => document.querySelector('#picture').dataset.codec === expected, codec);
+    assert.equal(await page.locator('#connection').getAttribute('data-session'), switchSession, 'switching back keeps WebSocket session');
     assert.ok(!(await page.evaluate(() => document.cookie)).includes('rm_auth'));
     const cookie = (await context.cookies()).find(c => c.name === 'rm_auth');
     assert.ok(cookie.httpOnly && cookie.sameSite === 'Strict');
@@ -172,7 +184,7 @@ try {
     await fs.writeFile(path.join(artifact, 'metrics.json'), JSON.stringify(report, null, 2));
     await page.screenshot({path: path.join(artifact, 'browser.png')});
     await fs.writeFile(path.join(artifact, 'console.json'), JSON.stringify(browserErrors, null, 2));
-    console.log(`${isFirefox?'Firefox':'Chromium'} E2E passed (${codec}): auth, pixels, widget click, Unicode, paste, CJK commit, orbit/zoom, capture, resize, two viewers, blur, reconnect.`);
+    console.log(`${isFirefox?'Firefox':'Chromium'} E2E passed (${codec}): auth, pixels, widget click, Unicode, paste, CJK commit, orbit/zoom, capture, resize, live JPEG/PNG switching, two viewers, blur, reconnect.`);
     console.log(JSON.stringify(report));
 } catch (error) {
     if (page) await page.screenshot({path: path.join(artifact, 'failure.png')}).catch(() => {});

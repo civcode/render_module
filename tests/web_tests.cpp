@@ -19,6 +19,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <thread>
 
 using namespace render_module::detail;
@@ -56,7 +57,7 @@ struct Client {
         beast::error_code error; socket.handshake(response, "127.0.0.1", "/api/ws", error); return !error;
     }
     void Send(boost::json::object message) {
-        message["v"] = 1; message["seq"] = ++seq; socket.text(true); socket.write(net::buffer(boost::json::serialize(message)));
+        message["v"] = WebProtocolVersion; message["seq"] = ++seq; socket.text(true); socket.write(net::buffer(boost::json::serialize(message)));
     }
     void Raw(const std::string& text) { socket.text(true); socket.write(net::buffer(text)); }
     std::vector<unsigned char> Read(bool& binary) {
@@ -71,11 +72,13 @@ struct Client {
         }
         throw std::runtime_error("missing control message");
     }
-    std::uint64_t Frame() {
+    std::uint64_t Frame(std::optional<ImageCodec> expected = {}) {
         for (int n = 0; n < 30; ++n) {
             bool binary; auto data = Read(binary); if (!binary) continue;
             REQUIRE((data.size()>=28 && std::memcmp(data.data(),"RMIM",4)==0 && data[4]==0 && data[5]==2));
             REQUIRE((data[6]==0 && (data[7]==1 || data[7]==2)));
+            const auto codec=data[7]==1?ImageCodec::Jpeg:ImageCodec::Png;
+            if(expected) REQUIRE((codec==*expected));
             std::uint64_t id=0; for(int i=8;i<16;++i) id=(id<<8)|data[i]; return id;
         }
         throw std::runtime_error("missing frame");
@@ -94,8 +97,9 @@ boost::json::object KeyMessage(bool down) {
 void ServerTests() {
     auto queue = std::make_shared<RemoteInputQueue>(); WebConfig config; config.port = 0; config.authToken = token; config.maxClients = 3;
     { auto bad=config; bad.bindAddress="0.0.0.0"; bad.authToken.clear(); WebServer denied(bad,queue); REQUIRE((!denied.Start())); }
-    { auto bad=config;bad.imageCodec=static_cast<render_module::WebSocketImageCodec>(99);WebServer denied(bad,queue);REQUIRE((!denied.Start())); }
+    { auto bad=config;bad.initialStream=static_cast<render_module::WebStreamMode>(99);WebServer denied(bad,queue);REQUIRE((!denied.Start())); }
     { auto bad=config;bad.jpegQuality=0;WebServer denied(bad,queue);REQUIRE((!denied.Start())); }
+    { auto bad=config;bad.initialStream=render_module::WebStreamMode::H264;WebServer denied(bad,queue);REQUIRE((!denied.Start())); }
     WebServer server(config, queue); REQUIRE((server.Start())); const auto port = server.Port(); REQUIRE((port));
     REQUIRE((Get(port, "/").result_int() == 200));
     REQUIRE((Get(port, "/app.js").body().find("normalizedPoint") != std::string::npos));
@@ -109,7 +113,8 @@ void ServerTests() {
     { Client bad; REQUIRE((!bad.Connect(port, true, false))); REQUIRE((bad.response.result_int() == 403)); }
     Client controller, viewer;
     REQUIRE((controller.Connect(port)));auto welcome=controller.Until("welcome");REQUIRE((welcome.at("control").as_bool()));
-    REQUIRE((welcome.at("transport")=="websocket-image" && welcome.at("imageCodec")=="jpeg"));
+    REQUIRE((welcome.at("stream")=="jpeg" && welcome.at("mediaTransport")=="websocket" && welcome.at("inputTransport")=="websocket-json-v1"));
+    REQUIRE((welcome.at("availableStreams").as_array().size()>=2));
     REQUIRE((welcome.at("session").as_string().size() == 32)); REQUIRE((queue->TakeReleaseAll()));
     REQUIRE((viewer.Connect(port))); auto watch = viewer.Until("welcome"); REQUIRE((!watch.at("control").as_bool()));
     REQUIRE((watch.at("session") != welcome.at("session")));
@@ -127,14 +132,45 @@ void ServerTests() {
     Wait([&] { return server.TakeViewport(requested) && requested.width == 349 && requested.height == 249; });
     EncodedImage fake; fake.codec=ImageCodec::Jpeg; fake.width=320; fake.height=200;
     fake.bytes={0xff,0xd8,0xff,0xd9}; fake.frameId=1;
-    server.Publish(std::make_shared<const std::vector<unsigned char>>(PackImage(fake)),1);
+    server.PublishImage(ImageCodec::Jpeg,std::make_shared<const std::vector<unsigned char>>(PackImage(fake)),1);
     REQUIRE((controller.Frame() == 1));
     for (std::uint64_t id = 2; id <= 100; ++id)
-        { fake.frameId=id; server.Publish(std::make_shared<const std::vector<unsigned char>>(PackImage(fake)),id); }
+        { fake.frameId=id; server.PublishImage(ImageCodec::Jpeg,std::make_shared<const std::vector<unsigned char>>(PackImage(fake)),id); }
     std::this_thread::sleep_for(std::chrono::milliseconds(80));
     controller.Send({{"type", "frame_ack"}, {"frameId", 1}});
     REQUIRE((controller.Frame() == 100)); REQUIRE((server.counters.dropped > 0));
     controller.Send({{"type", "frame_ack"}, {"frameId", 100}});
+    // Stream selection is per session. Keep the viewer on JPEG while the controller switches to PNG.
+    controller.Send({{"type","set_stream"},{"stream","png"}});
+    auto changed=controller.Until("stream_changed");
+    REQUIRE((changed.at("stream")=="png" && changed.at("mediaTransport")=="websocket" && changed.at("control").as_bool()));
+    Wait([&]{ const auto d=server.Demand(); return d.jpeg && d.png && !d.h264; });
+    EncodedImage jpegMixed=fake; jpegMixed.codec=ImageCodec::Jpeg; jpegMixed.frameId=101; jpegMixed.bytes={0xff,0xd8,0xff,0xd9};
+    EncodedImage pngMixed; pngMixed.codec=ImageCodec::Png; pngMixed.frameId=101; pngMixed.width=320; pngMixed.height=200;
+    pngMixed.bytes={0x89,'P','N','G',0x0d,0x0a,0x1a,0x0a};
+    server.PublishImage(ImageCodec::Jpeg,std::make_shared<const std::vector<unsigned char>>(PackImage(jpegMixed)),101);
+    server.PublishImage(ImageCodec::Png,std::make_shared<const std::vector<unsigned char>>(PackImage(pngMixed)),101);
+    REQUIRE((controller.Frame(ImageCodec::Png)==101));
+    REQUIRE((viewer.Frame(ImageCodec::Jpeg)==101));
+    viewer.Send({{"type","frame_ack"},{"frameId",101}});
+    // An image switch waits for the exact outstanding ACK before changing demand/state.
+    pngMixed.frameId=102; server.PublishImage(ImageCodec::Png,std::make_shared<const std::vector<unsigned char>>(PackImage(pngMixed)),102);
+    REQUIRE((controller.Frame(ImageCodec::Png)==102));
+    controller.Send({{"type","set_stream"},{"stream","jpeg"}});
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    REQUIRE((server.Demand().png));
+    controller.Send({{"type","frame_ack"},{"frameId",102}});
+    changed=controller.Until("stream_changed"); REQUIRE((changed.at("stream")=="jpeg" && changed.at("control").as_bool()));
+    Wait([&]{ const auto d=server.Demand(); return d.jpeg && !d.png; });
+    // H.264 is not advertised/available in this WebSocket-only server, but failure is recoverable.
+    controller.Send({{"type","set_stream"},{"stream","h264"}});
+    auto streamError=controller.Until("stream_error");
+    REQUIRE((streamError.at("stream")=="h264" && streamError.at("code")=="unavailable"));
+    controller.Send(KeyMessage(true)); Wait([&]{return queue->Size()==1;}); REQUIRE((queue->TryPop(event)));
+    // Signaling syntax may parse globally, but the session state machine rejects it outside H.264.
+    { Client signalBad; REQUIRE((signalBad.Connect(port))); const auto signalWelcome=signalBad.Until("welcome");
+      signalBad.Send({{"type","hello"},{"session",signalWelcome.at("session")}}); signalBad.Closed(); }
+    Wait([&]{return server.counters.sessions==2;});
     for (int n = 0; n < 12; ++n) {
         Client temporary; REQUIRE((temporary.Connect(port))); temporary.Until("welcome");
         if (n == 0) { Client extra; REQUIRE((!extra.Connect(port))); REQUIRE((extra.response.result_int() == 503)); }
@@ -147,10 +183,10 @@ void ServerTests() {
     REQUIRE((queue->TakeReleaseAll())); viewer.Close(); Wait([&] { return server.counters.sessions == 0; });
     REQUIRE((queue->TakeReleaseAll()));
     for (const std::string& invalid : {std::string("{"),
-         std::string(R"({"v":1,"seq":1,"type":"mouse_move","x":2,"y":0,"source":"mouse"})"),
-         std::string(R"({"v":1,"seq":1,"type":"key","key":"Bogus","down":true})"),
-         std::string(R"({"v":1,"seq":1,"type":"viewport","width":0,"height":20,"devicePixelRatio":1})"),
-         std::string(R"({"v":1,"seq":1,"type":"text","text":"\ud800"})"),
+         std::string(R"({"v":2,"seq":1,"type":"mouse_move","x":2,"y":0,"source":"mouse"})"),
+         std::string(R"({"v":2,"seq":1,"type":"key","key":"Bogus","down":true})"),
+         std::string(R"({"v":2,"seq":1,"type":"viewport","width":0,"height":20,"devicePixelRatio":1})"),
+         std::string(R"({"v":2,"seq":1,"type":"text","text":"\ud800"})"),
          std::string("\xff"), std::string(WebMessageLimit+1, 'x')}) {
         Client bad; REQUIRE((bad.Connect(port))); bad.Until("welcome"); bad.Raw(invalid); bad.Closed();
         Wait([&] { return server.counters.sessions == 0; });
@@ -158,30 +194,32 @@ void ServerTests() {
     Client slow; REQUIRE((slow.Connect(port))); slow.Until("welcome");
     std::vector<unsigned char> large(1024*1024, 42);
     fake.frameId=101;fake.bytes=std::move(large);
-    server.Publish(std::make_shared<const std::vector<unsigned char>>(PackImage(fake)),101);
+    server.PublishImage(ImageCodec::Jpeg,std::make_shared<const std::vector<unsigned char>>(PackImage(fake)),101);
     std::this_thread::sleep_for(std::chrono::milliseconds(40));
     const auto stopStart = std::chrono::steady_clock::now();
     server.Stop();REQUIRE((server.counters.sessions==0));
     REQUIRE((std::chrono::steady_clock::now()-stopStart<std::chrono::seconds(2)));
-    auto pngConfig=config;pngConfig.imageCodec=render_module::WebSocketImageCodec::Png;pngConfig.jpegQuality=0;
+    auto pngConfig=config;pngConfig.initialStream=render_module::WebStreamMode::Png;
     WebServer pngServer(pngConfig,queue);REQUIRE((pngServer.Start()));Client pngClient;REQUIRE((pngClient.Connect(pngServer.Port())));
-    const auto pngWelcome=pngClient.Until("welcome");REQUIRE((pngWelcome.at("imageCodec")=="png"));
+    const auto pngWelcome=pngClient.Until("welcome");REQUIRE((pngWelcome.at("stream")=="png"));
     EncodedImage png;png.codec=ImageCodec::Png;png.frameId=1;png.width=32;png.height=24;
     png.bytes={0x89,'P','N','G',0x0d,0x0a,0x1a,0x0a};
-    pngServer.Publish(std::make_shared<const std::vector<unsigned char>>(PackImage(png)),1);REQUIRE((pngClient.Frame()==1));
+    pngServer.PublishImage(ImageCodec::Png,std::make_shared<const std::vector<unsigned char>>(PackImage(png)),1);REQUIRE((pngClient.Frame()==1));
     const auto pngMetrics=boost::json::parse(Get(pngServer.Port(),"/api/version",true).body()).as_object();
-    REQUIRE((pngMetrics.at("image_codec")=="png"));pngClient.Close();pngServer.Stop();
+    REQUIRE((pngMetrics.at("initial_stream")=="png"));
+    REQUIRE((pngMetrics.at("stream_sessions").as_object().at("png").as_uint64()==1));
+    pngClient.Close();pngServer.Stop();
 }
 #ifdef WEBRTC_TEST
 void SignalingTests() {
     auto queue=std::make_shared<RemoteInputQueue>();
     auto pipeline=std::make_shared<render_module::video::VideoPipeline>(); REQUIRE((pipeline->Configure({})));
-    WebConfig config; config.port=0; config.authToken=token; config.transport=render_module::WebTransport::WebRtc;
+    WebConfig config; config.port=0; config.authToken=token; config.initialStream=render_module::WebStreamMode::H264;
     WebServer server(config,queue,pipeline); REQUIRE((server.Start())); const auto port=server.Port();
     { Client bad; REQUIRE((!bad.Connect(port,false))); REQUIRE((bad.response.result_int()==401)); }
     { Client bad; REQUIRE((!bad.Connect(port,true,false))); REQUIRE((bad.response.result_int()==403)); }
     Client owner; REQUIRE((owner.Connect(port))); const auto welcome=owner.Until("welcome");
-    REQUIRE((welcome.at("transport")=="webrtc" && welcome.at("imageCodec")=="inactive")); const auto ownerId=welcome.at("session");
+    REQUIRE((welcome.at("stream")=="h264" && welcome.at("mediaTransport")=="webrtc")); const auto ownerId=welcome.at("session");
     owner.Send({{"type","hello"},{"session",ownerId}});owner.Until("hello");owner.Until("offer");
     REQUIRE((queue->TakeReleaseAll()));
     // Seed the existing input queue to check cancellation isolation. WebRTC WS input is forbidden.
@@ -219,25 +257,26 @@ void SignalingTests() {
 #endif
 void ProtocolTests() {
     WebConfig config; WebInputState state; WebMessage result;
-    REQUIRE((ParseWebMessage(R"({"v":1,"seq":1,"type":"text","text":"äöüÄÖÜß 日本 🙂"})", config, state, result)));
+    REQUIRE((ParseWebMessage(R"({"v":2,"seq":1,"type":"text","text":"äöüÄÖÜß 日本 🙂"})", config, state, result)));
     REQUIRE((std::holds_alternative<TextUtf8>(result.events.back())));
-    REQUIRE((ParseWebMessage(R"({"v":1,"seq":1,"type":"frame_ack","frameId":"18446744073709551615"})", config, state, result)));
+    REQUIRE((ParseWebMessage(R"({"v":2,"seq":1,"type":"frame_ack","frameId":"18446744073709551615"})", config, state, result)));
     REQUIRE((result.frameId == UINT64_MAX));
-    REQUIRE((!ParseWebMessage(R"({"v":2,"seq":1,"type":"focus","focused":true})", config, state, result)));
-    REQUIRE((!ParseWebMessage(R"({"v":1,"seq":0,"type":"focus","focused":true})", config, state, result)));
-    REQUIRE((!ParseWebMessage(R"({"v":1,"seq":1,"type":"mouse_move","x":1e999,"y":0,"source":"mouse"})", config, state, result)));
-    REQUIRE((!ParseWebMessage(R"({"v":1,"seq":1,"type":"wheel","horizontal":0,"vertical":1001})", config, state, result)));
-    REQUIRE((!ParseWebMessage(std::string("{\"v\":1,\"seq\":1,\"type\":\"text\",\"text\":\"")+std::string(257, 'a')+"\"}", config, state, result)));
+    REQUIRE((!ParseWebMessage(R"({"v":1,"seq":1,"type":"focus","focused":true})", config, state, result)));
+    REQUIRE((!ParseWebMessage(R"({"v":2,"seq":0,"type":"focus","focused":true})", config, state, result)));
+    REQUIRE((!ParseWebMessage(R"({"v":2,"seq":1,"type":"mouse_move","x":1e999,"y":0,"source":"mouse"})", config, state, result)));
+    REQUIRE((!ParseWebMessage(R"({"v":2,"seq":1,"type":"wheel","horizontal":0,"vertical":1001})", config, state, result)));
+    REQUIRE((!ParseWebMessage(std::string("{\"v\":2,\"seq\":1,\"type\":\"text\",\"text\":\"")+std::string(257, 'a')+"\"}", config, state, result)));
     auto size = ClampWebViewport(4000, 1000, config); REQUIRE((size.width == 1920 && size.height == 480));
     REQUIRE((ClampWebViewport(0, 100, config).width == 0));
     REQUIRE((ClampWebViewport(20000, 100, config).width == 0));
-    auto signal=boost::json::object{{"v",1},{"seq",1},{"type","hello"},{"session",std::string(32,'a')}};
-    REQUIRE((!ParseWebMessage(boost::json::serialize(signal),config,state,result)));
-    config.transport=render_module::WebTransport::WebRtc;
-    REQUIRE((ClampWebViewport(1,1,config).width==16 && ClampWebViewport(1,1,config).height==16));
-    REQUIRE((ClampWebViewport(1279,719,config).width==1278 && ClampWebViewport(1279,719,config).height==718));
+    REQUIRE((ParseWebMessage(R"({"v":2,"seq":2,"type":"set_stream","stream":"png"})",config,state,result)));
+    REQUIRE((result.kind==WebMessage::Kind::SetStream && result.stream==render_module::WebStreamMode::Png));
+    REQUIRE((!ParseWebMessage(R"({"v":2,"seq":2,"type":"set_stream","stream":"av1"})",config,state,result)));
+    auto signal=boost::json::object{{"v",2},{"seq",1},{"type","hello"},{"session",std::string(32,'a')}};
+    REQUIRE((ClampWebViewport(1,1,config).width==1 && ClampWebViewport(1,1,config).height==1));
+    REQUIRE((ClampWebViewport(1279,719,config).width==1279 && ClampWebViewport(1279,719,config).height==719));
     REQUIRE((ParseWebMessage(boost::json::serialize(signal),config,state,result)));
-    signal["v"]=2;REQUIRE((!ParseWebMessage(boost::json::serialize(signal),config,state,result)));signal["v"]=1;
+    signal["v"]=1;REQUIRE((!ParseWebMessage(boost::json::serialize(signal),config,state,result)));signal["v"]=2;
     signal["type"]="offer";REQUIRE((!ParseWebMessage(boost::json::serialize(signal),config,state,result)));
     signal["type"]="answer";signal["sdp"]=std::string(32769,'a');REQUIRE((!ParseWebMessage(boost::json::serialize(signal),config,state,result)));
     signal["sdp"]="valid-size";REQUIRE((ParseWebMessage(boost::json::serialize(signal),config,state,result)));
@@ -263,7 +302,7 @@ void PngTests() {
         if(x<8&&y<8) { const unsigned char colors[][4]={{0,0,0,0},{255,255,255,255},{255,0,0,128},{0,255,0,64},{0,0,255,255}};
             std::memcpy(p,colors[(x+y)%5],4); }
     }
-    ImageEncoder encoder(render_module::WebSocketImageCodec::Png,80,WebFrameLimit);EncodedImage encoded;
+    ImageEncoder encoder(ImageCodec::Png,80,WebFrameLimit);EncodedImage encoded;
     for(std::uint64_t id=1;id<=20;++id) {
         REQUIRE((encoder.Encode(pattern,id,encoded)));REQUIRE((encoded.codec==ImageCodec::Png && encoded.frameId==id));
         const unsigned char signature[]={0x89,'P','N','G',0x0d,0x0a,0x1a,0x0a};
@@ -283,7 +322,7 @@ void PngTests() {
     }
     REQUIRE((chunks.size()==3 && chunks[0]=="IHDR" && chunks[1]=="IDAT" && chunks[2]=="IEND"));
     ImageRgba invalid;std::vector<unsigned char> bytes{1};REQUIRE((!ImagePresenter::EncodePng(invalid,bytes)));
-    ImageEncoder tiny(render_module::WebSocketImageCodec::Png,80,8);REQUIRE((!tiny.Encode(pattern,1,encoded)));
+    ImageEncoder tiny(ImageCodec::Png,80,8);REQUIRE((!tiny.Encode(pattern,1,encoded)));
     ImageRgba noise;noise.width=1920;noise.height=1080;noise.pixels.resize(std::size_t(noise.width)*noise.height*4);
     std::uint32_t random=1;for(auto& byte:noise.pixels){random=random*1664525u+1013904223u;byte=static_cast<unsigned char>(random>>24);}
     REQUIRE((encoder.Encode(noise,22,encoded) && encoded.bytes.size()<WebFrameLimit));
@@ -340,11 +379,11 @@ void JpegTests() {
 
 TEST_CASE("Web protocol", "[web][protocol]") { ProtocolTests(); }
 TEST_CASE("Web server", "[web][server]") { ServerTests(); }
-TEST_CASE("Web JPEG transport", "[web][jpeg]") {
+TEST_CASE("Web JPEG stream", "[web][jpeg]") {
     RenderModuleTestGuard cleanup;
     JpegTests();
 }
-TEST_CASE("Web PNG transport", "[web][png]") {
+TEST_CASE("Web PNG stream", "[web][png]") {
     RenderModuleTestGuard cleanup;
     PngTests();
 }

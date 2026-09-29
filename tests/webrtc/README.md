@@ -16,7 +16,7 @@ authenticated signaling rejection/ownership/bounds/reconnect/shutdown.
 Browser tests: real decoded colors and DataChannel controls, Unicode, orbit, fast-lane
 loss/reordering, four resolutions on one peer, two viewers/one encoder, independent
 SSRCs, forged viewer input rejection, controller transfer, control-channel loss,
-held-key reconnect, signaling-only WebSocket, refresh, getStats and slow-sender isolation.
+held-key reconnect, live H.264/JPEG switching on one WebSocket session, H.264 signaling-only WebSocket traffic, refresh, getStats and slow-sender isolation.
 
 `webrtc_chromium_loss1/3` drop respectively 1/3 initial RTP packets per 100,
 after NACK storage; retransmissions are not dropped. This is deterministic

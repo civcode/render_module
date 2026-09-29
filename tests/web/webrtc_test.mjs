@@ -63,7 +63,7 @@ try {
         for(const event of ['framesent','framereceived']) ws.on(event,({payload})=>{
             if(typeof payload!=='string') return;
             try { const m=JSON.parse(payload);
-                if(event==='framesent' && !['hello','answer','ice-candidate','ice-complete'].includes(m.type)) unexpectedWsInput.push(m.type);
+                if(event==='framesent' && !['hello','answer','ice-candidate','ice-complete','set_stream','frame_ack','focus','release_all'].includes(m.type)) unexpectedWsInput.push(m.type);
                 if(['hello','offer','answer','ice-candidate','ice-complete','webrtc-state','error'].includes(m.type)) {
                     signalingTrace.push({event,type:m.type,state:m.state,code:m.code,
                         codec:m.sdp?.split('\r\n').filter(l=>l.startsWith('a=fmtp:') || l.startsWith('m=') || l==='a=recvonly'),
@@ -172,7 +172,7 @@ try {
     await watch.evaluate(()=>new Promise(resolve=>{
         const url=new URL('/api/ws',location.href);url.protocol='ws:';const ws=new WebSocket(url);
         ws.onmessage=e=>{if(typeof e.data!=='string')return;const m=JSON.parse(e.data);
-            if(m.type==='welcome')ws.send(JSON.stringify({v:1,seq:1,type:'mouse_button',button:'left',down:true}));
+            if(m.type==='welcome')ws.send(JSON.stringify({v:2,seq:1,type:'mouse_button',button:'left',down:true}));
         };
         ws.onclose=()=>resolve();
     }));
@@ -205,6 +205,18 @@ try {
     const before=Number(await page.locator('#video').getAttribute('data-frames-decoded'));
     await watchContext.close();await until(async()=>(await metrics()).webrtc_connected===1,'disconnect only viewer');
     await until(async()=>Number(await page.locator('#video').getAttribute('data-frames-decoded'))>before,'controller stream survives viewer disconnect');
+    // Cycle H.264 -> JPEG -> H.264 without replacing the authenticated WebSocket session.
+    const switchSession=await page.locator('#connection').getAttribute('data-session');
+    await page.locator('[data-stream="jpeg"]').click();
+    await page.waitForFunction(()=>document.querySelector('#picture').dataset.codec==='jpeg' && Number(document.querySelector('#picture').dataset.frameId)>0);
+    assert.equal(await page.locator('#connection').getAttribute('data-session'),switchSession,'H.264 -> JPEG keeps session');
+    assert.equal(await page.locator('#lease').getAttribute('data-control'),'true','H.264 -> JPEG keeps lease');
+    await until(async()=>{const x=await metrics();return x.stream_sessions.jpeg===1&&x.stream_sessions.h264===0&&x.webrtc_sessions===0;},'H.264 peer torn down for JPEG');
+    await page.locator('[data-stream="h264"]').click();
+    await until(()=>decoded(page),'JPEG -> H.264 decode after live switch');
+    assert.equal(await page.locator('#connection').getAttribute('data-session'),switchSession,'JPEG -> H.264 keeps session');
+    assert.equal(await page.locator('#lease').getAttribute('data-control'),'true','JPEG -> H.264 keeps lease');
+    await until(async()=>{const x=await metrics();return x.stream_sessions.jpeg===0&&x.stream_sessions.h264===1&&x.webrtc_connected===1;},'H.264 peer recreated after live switch');
     const loss=Number(process.env.RENDER_MODULE_TEST_LOSS||0);
     if(loss) {
         await until(async()=>{const s=await metrics();return s.rtcp_nacks>0 && s.rtp_retransmits>0 && s.test_packets_dropped>0;},'NACK recovery under packet loss');
@@ -228,7 +240,7 @@ try {
     for(let n=0;n<2;++n) {await page.reload();await until(()=>decoded(page),'refresh decoding');}
     await until(async()=>!(await state()).mouseHeld && !(await state()).ctrl && !(await state()).keyHeld,'no stuck state');
     assert.equal(await page.evaluate(()=>window.testDataChannels),0);
-    assert.equal((await metrics()).jpegEncoded,0);assert.equal((await metrics()).encoder.errors,0);
+    assert.ok((await metrics()).jpegEncoded>0);assert.equal((await metrics()).pngEncoded,0);assert.equal((await metrics()).encoder.errors,0);
     assert.deepEqual(errors,[]);assert.deepEqual(unexpectedWsInput,[],'production WS carries signaling only');assert.equal((await state()).glError,0);
     const report={browser:browser.version(),engine:isFirefox?'firefox':'chromium',lossPercent:loss,inputFaults,
         forcedRelay:!!process.env.RENDER_MODULE_TEST_TURN,slowViewer:!!process.env.RENDER_MODULE_TEST_SLOW_VIEWER,measurement,twoViewerMetrics:end,metrics:mediaMetrics,
@@ -236,7 +248,7 @@ try {
         answerFmtp:signalingTrace.find(m=>m.type==='answer')?.codec?.filter(l=>l.startsWith('a=fmtp:'))};
     await fs.writeFile(path.join(artifact,'metrics.json'),JSON.stringify(report,null,2));
     await page.screenshot({path:path.join(artifact,'browser.png')});
-    console.log('WebRTC E2E passed: actual H264 decode/colors, DataChannel input, four sizes/one PC, two viewers, independent SSRC, viewer rejection, reconnect/refresh, bounded queues.');
+    console.log('WebRTC E2E passed: actual H264 decode/colors, DataChannel input, four sizes/one PC, live H264/JPEG switching, two viewers, independent SSRC, viewer rejection, reconnect/refresh, bounded queues.');
     console.log(JSON.stringify(report));
 } catch(error) {
     if(page)await page.screenshot({path:path.join(artifact,'failure.png')}).catch(()=>{});
