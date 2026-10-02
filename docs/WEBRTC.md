@@ -50,7 +50,7 @@ the authenticated WebSocket alive.
 `RENDER_MODULE_ENABLE_WEBRTC=OFF` neither fetches nor links libdatachannel. JPEG/PNG Web
 builds do not need VIDEO or OpenH264. `RenderModuleWebRtc` remains a private adapter; public
 installed headers expose no libdatachannel types. See
-[third_party/WEBRTC_NOTICE.md](third_party/WEBRTC_NOTICE.md).
+[third_party/WEBRTC_NOTICE.md](../third_party/WEBRTC_NOTICE.md).
 
 ## Dependency and ICE policy
 
@@ -172,7 +172,7 @@ The measurements/counts below are the committed Phase 7 baseline, before adding
 DataChannels. Current input transport and Phase 8 verification are documented in
 [INPUT_PROTOCOL.md](INPUT_PROTOCOL.md).
 
-See [test recipes](tests/webrtc/README.md). Chromium 153.0.8010.12 and Firefox 155.0
+See [test recipes](../tests/webrtc/README.md). Chromium 153.0.8010.12 and Firefox 155.0
 (with Mozilla-manifest-verified Cisco OpenH264 GMP 2.6.0) both decoded real video,
 passed ImGui/NanoVG/Magnum pixel checks, click/Unicode/orbit input, repeated reconnect
 and held-key release, and **1280×720 → 1600×900 → 1920×1080 → 1280×720 on one PC**.

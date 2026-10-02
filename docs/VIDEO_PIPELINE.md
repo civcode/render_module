@@ -55,7 +55,7 @@ builds. Neither encoder executables nor FFmpeg are required by the library.
 The separately exported **`RenderModule::Video`** shared library has no GL,
 ImGui, Web, Boost or input dependency. Codec/converter archives link privately.
 Installed headers expose only project/C++ types; installed builds carry the
-upstream notices. See [VIDEO_NOTICE.md](third_party/VIDEO_NOTICE.md).
+upstream notices. See [VIDEO_NOTICE.md](../third_party/VIDEO_NOTICE.md).
 
 ## API and ownership
 

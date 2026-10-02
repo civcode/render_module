@@ -111,7 +111,7 @@ backend; see [third_party/PNG_NOTICE.md](third_party/PNG_NOTICE.md).
 Headless mode uses a private, browser-independent `RemoteInputBackend`, with a
 256-slot thread-safe typed event queue. It feeds ImGui's Add*Event APIs for mouse,
 keys/modifiers, committed UTF-8, focus, and state recovery. The queue itself is
-transport-independent: see [ARCHITECTURE.md](ARCHITECTURE.md#input-backends-phase-4)
+transport-independent: see [ARCHITECTURE.md](docs/ARCHITECTURE.md#input-backends-phase-4)
 for enqueue results, coalescing, release-all, and snapshot semantics.
 
 No window-system events close a headless run automatically; use `RequestClose()`
@@ -123,7 +123,7 @@ The Web backend now serves one frontend that can switch each browser session liv
 **JPEG**, **PNG**, and (when built) **H.264**. JPEG/PNG are binary images over WebSocket;
 H.264 is low-latency WebRTC media. The authenticated WebSocket remains connected in every
 mode and is the session/control/WebRTC-signaling backbone. JPEG/PNG use WebSocket JSON
-input; H.264 uses the WebRTC DataChannels described in [INPUT_PROTOCOL.md](INPUT_PROTOCOL.md).
+input; H.264 uses the WebRTC DataChannels described in [INPUT_PROTOCOL.md](docs/INPUT_PROTOCOL.md).
 
 JPEG is the smaller/faster image default. PNG is lossless and useful for exact UI
 inspection, static/low-motion screens and screenshot comparison. H.264 is the normal
@@ -186,7 +186,7 @@ session counts and bounded counters.
 Default binding is **127.0.0.1**. Non-loopback binds require explicit allowed Origins and
 authentication, unless unauthenticated exposure is explicitly enabled. The server is
 plaintext HTTP/WS: use TLS termination/tunneling for remote access. See
-[WEB_PROTOCOL.md](WEB_PROTOCOL.md) for the v2 control protocol, image framing, switching
+[WEB_PROTOCOL.md](docs/WEB_PROTOCOL.md) for the v2 control protocol, image framing, switching
 state machine, limits and security policies.
 
 ### Browser tests (development only)
@@ -219,7 +219,7 @@ interface and a bounded worker pipeline. `RenderModule::SetVideoOutput()` attach
 synchronous root capture; CPU consumers receive H.264 **Annex-B access units**.
 No transport is attached. JPEG/WebSocket continues working independently.
 
-See [VIDEO_PIPELINE.md](VIDEO_PIPELINE.md) for build/API examples, immutable pins,
+See [VIDEO_PIPELINE.md](docs/VIDEO_PIPELINE.md) for build/API examples, immutable pins,
 pixel order/orientation, timestamps, keyframes, bitrate/resolution changes,
 ownership/backpressure, tests and benchmarks. NASM enables optimized x86 OpenH264;
 FFmpeg is optional independent-decoder **test tooling only**. Hardware encoders
@@ -244,8 +244,8 @@ reloading the page or replacing its WebSocket. The server tears down/recreates o
 session's WebRTC peer and safely hands input authority between DataChannel and WebSocket.
 
 UDP/TCP TURN relay paths are tested; **TURN/TLS is rejected** because this libnice backend
-does not implement real TLS. See [WEBRTC.md](WEBRTC.md) for negotiation, bounds, pins,
-measurements, browser/loss coverage and deployment recipes. [INPUT_PROTOCOL.md](INPUT_PROTOCOL.md)
+does not implement real TLS. See [WEBRTC.md](docs/WEBRTC.md) for negotiation, bounds, pins,
+measurements, browser/loss coverage and deployment recipes. [INPUT_PROTOCOL.md](docs/INPUT_PROTOCOL.md)
 documents the binary DataChannel input/control protocol. **Phase 9/PBO readback has not
 started.**
 
@@ -308,7 +308,7 @@ GLFW Null + Mesa surfaceless display + pbuffer; native EGL device 0 (software)
 with both surfaceless binding and an explicitly requested 1×1 pbuffer. Software
 EGL devices may advertise DRM-node querying yet return no node; this is valid.
 No working NVIDIA GPU/driver was available, so proprietary NVIDIA support remains
-unverified. See [ARCHITECTURE.md](ARCHITECTURE.md) for the Magnum loader integration.
+unverified. See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for the Magnum loader integration.
 
 ## Interactive 3D views
 
@@ -447,4 +447,4 @@ NanoVG fonts are discovered in the build assets, the configured install data dir
 
 `RegisterNanoVGCallback`, `RenderModule::ZoomView`, and the `ZoomView` conversion helpers remain available for existing code. New 2D code should prefer `RegisterCanvas` and `Canvas::DrawViewport`. New 3D code should use `Register3DView`.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for component boundaries and extension guidance.
+See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for component boundaries and extension guidance.

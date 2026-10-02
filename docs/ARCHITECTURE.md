@@ -134,7 +134,7 @@ vertical flip** reverses CPU rows immediately after readback, from GL bottom-ori
 to top-origin RGBA. PNG encoding does not flip; Desktop blitting does not flip.
 A path-less headless presenter only flushes work—readback occurs on explicit
 capture, not every frame. The PNG writer is reused from pinned NanoVG; see
-[PNG_NOTICE.md](third_party/PNG_NOTICE.md).
+[PNG_NOTICE.md](../third_party/PNG_NOTICE.md).
 
 Shutdown, with the context current: presenter → root → Canvas/View3D GPU storage
 → Magnum renderer/tracker → NanoVG → ImGui renderer/platform and ImPlot/ImGui

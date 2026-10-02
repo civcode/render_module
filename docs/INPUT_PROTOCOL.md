@@ -86,7 +86,7 @@ use the existing bounded WS error/close path; Error and terminal StreamState are
 reserved wire vocabulary, not a promise of delivery after a channel fails.
 
 The explicit stable IDs and physical DOM code mapping have one source of truth:
-[`web/protocol_keys.mjs`](web/protocol_keys.mjs). CMake generates the private C++
+[`web/protocol_keys.mjs`](../web/protocol_keys.mjs). CMake generates the private C++
 lookup from that table, never from RenderKey/ImGui/GLFW enum ordinals. IDs 1–26 are
 A–Z, 27–36 digits, 37–51 navigation, 52–63 F1–F12, 64–71 left/right modifiers,
 72–82 punctuation, 83–88 locks/system keys, 89–105 keypad. IDs must never be renumbered.
@@ -176,7 +176,7 @@ and delays one move at a time by 100 ms. It verifies continued reliable clicks a
 stale-motion rejection. This is separate from the existing RTP loss test; neither
 is a claim about random WAN loss. Fake-channel tests verify one-slot coalescing and
 reliable saturation; no synthetic client queue limits are substituted in production.
-See [test recipes](tests/webrtc/README.md) and the retained media tests in [WEBRTC.md](WEBRTC.md).
+See [test recipes](../tests/webrtc/README.md) and the retained media tests in [WEBRTC.md](WEBRTC.md).
 Real OS/mobile IME, WAN congestion, long soak, TSan cleanliness and end-to-end latency
 remain outside the verified scope.
 

@@ -24,7 +24,7 @@ JPEG and PNG only.
 Boost.Beast/Asio provide asynchronous HTTP and WebSocket support and Boost.JSON handles
 strict JSON/UTF-8 parsing. Boost >=1.75 is required. `JPEG::JPEG` supplies JPEG encoding.
 PNG reuses the public-domain `stb_image_write` already pinned through NanoVG; no temporary
-files or external processes are used. See [WEB_NOTICE.md](third_party/WEB_NOTICE.md).
+files or external processes are used. See [WEB_NOTICE.md](../third_party/WEB_NOTICE.md).
 
 All HTTP-library types remain private to `src/web/`. Assets in `web/` are embedded by
 CMake for source and installed builds; Node/npm are test-only dependencies.
